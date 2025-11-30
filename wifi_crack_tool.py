@@ -362,21 +362,64 @@ class WifiCrackTool:
     # 开始破解
     def start(self):
         try:
-            if self.config_settings_data['pwd_txt_path']!="" and os.path.exists(self.config_settings_data['pwd_txt_path']):
-                wifi_name = self.ui.cbo_wifi_name.currentText()
-                self.run = True
-                self.set_controls_running_state()
-                if self.ui.cbo_wifi_name.currentIndex() == 0:
-                    thread = threading.Thread(target=self.crack.auto_crack)
-                    thread.daemon = True
-                    thread.start()
+            # 检查密码本是否存在
+            if self.config_settings_data['pwd_txt_path'] == "" or not os.path.exists(self.config_settings_data['pwd_txt_path']):
+                # 弹出对话框询问用户是否选择密码本
+                reply = QMessageBox.question(self.win, '密码本缺失', '未找到密码本，是否选择密码本文件？', 
+                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                                           QMessageBox.StandardButton.Yes)
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    if not self.change_pwd_file():
+                        return  # 用户取消选择或选择失败
                 else:
-                    thread = threading.Thread(target=self.crack.crack,args=(wifi_name,))
+                    # 用户选择不选择密码本，给出警告
+                    self.win.showwarning(title='警告', message='未选择密码本，将无法进行破解！')
+                    return
+            
+            wifi_name = self.ui.cbo_wifi_name.currentText()
+            self.run = True
+            self.set_controls_running_state()
+            
+            # 检查是否有断点信息
+            if not self.pwd_file_changed and wifi_name in self.resume_info and self.resume_info[wifi_name]['pwd_file'] == self.config_settings_data['pwd_txt_path']:
+                # 询问用户是否从断点继续
+                resume_position = self.resume_info[wifi_name]['position']
+                reply = QMessageBox.question(self.win, '断点续传', 
+                                           f'发现上次破解 [{wifi_name}] 时在密码本第 {resume_position} 行中断，是否从该位置继续？\n\n选择"是"从断点继续，选择"否"从头开始。',
+                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                                           QMessageBox.StandardButton.Yes)
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # 从断点继续
+                    if self.ui.cbo_wifi_name.currentIndex() == 0:
+                        thread = threading.Thread(target=self.crack.auto_crack, args=(resume_position,))
+                    else:
+                        thread = threading.Thread(target=self.crack.crack, args=(wifi_name, resume_position,))
                     thread.daemon = True
                     thread.start()
+                    # 重置pwd_file_changed标志
+                    self.pwd_file_changed = False
+                    return
+                elif reply == QMessageBox.StandardButton.Cancel:
+                    # 取消操作
+                    self.run = False
+                    self.reset_controls_state()
+                    # 重置pwd_file_changed标志
+                    self.pwd_file_changed = False
+                    return
+            
+            # 正常开始（从头开始）
+            if self.ui.cbo_wifi_name.currentIndex() == 0:
+                thread = threading.Thread(target=self.crack.auto_crack)
+                thread.daemon = True
+                thread.start()
             else:
-                if self.change_pwd_file():
-                    self.start()
+                thread = threading.Thread(target=self.crack.crack, args=(wifi_name,))
+                thread.daemon = True
+                thread.start()
+            # 重置pwd_file_changed标志
+            self.pwd_file_changed = False
         except Exception as r:
             self.win.showerror(title='错误警告',message='开始运行时发生未知错误 %s' %(r))
             self.show_msg('[错误]开始运行时发生未知错误 %s\n\n' %(r),"red")
@@ -414,6 +457,36 @@ class WifiCrackTool:
             self.show_msg('[错误]停止过程中发生未知错误 %s\n\n' %(r),"red")
             self.reset_controls_state()
 
+    # 保存断点信息
+    def save_resume_info(self, ssid: str, pwd_source: str, pwd_file: str, position: int):
+        '''保存断点信息'''
+        try:
+            self.resume_info[ssid] = {
+                'pwd_source': pwd_source,      # 密码来源（json/txt）
+                'pwd_file': pwd_file,          # 密码本文件路径
+                'position': position           # 当前尝试的位置
+            }
+            with open(self.resume_file_path, 'w', encoding='utf-8') as f:
+                json.dump(self.resume_info, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            self.show_msg(f'[警告]保存断点信息失败: {e}\n', "orange")
+    
+    # 清除断点信息
+    def clear_resume_info(self, ssid: str = None):
+        '''清除断点信息'''
+        try:
+            if ssid:
+                # 清除特定WiFi的断点信息
+                if ssid in self.resume_info:
+                    del self.resume_info[ssid]
+            else:
+                # 清除所有断点信息
+                self.resume_info.clear()
+            
+            with open(self.resume_file_path, 'w', encoding='utf-8') as f:
+                json.dump(self.resume_info, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            self.show_msg(f'[警告]清除断点信息失败: {e}\n', "orange")
     # 暴力破解wifi密码的类
     class Crack:
         '''用于暴力破解wifi的类'''
@@ -493,9 +566,10 @@ class WifiCrackTool:
                     self.win.show_msg.send(f"[错误]扫描wifi时发生未知错误 {r}\n\n","red")
                 self.win.reset_controls_state.send()
 
-        def auto_crack(self):
+        def auto_crack(self, start_position:int=0):
             '''
             自动破解所有WiFi
+            :start_position 起始位置（用于断点续传，但自动模式下暂时不使用）
             '''
             try:
                 self.is_auto = True
@@ -533,10 +607,11 @@ class WifiCrackTool:
                 self.win.reset_controls_state.send()
                 return False
         
-        def crack(self,ssid:str):
+        def crack(self,ssid:str, start_position:int=0):
             '''
             破解wifi
             :ssid wifi名称
+            :start_position 起始位置（用于断点续传）
             '''
             try:
                 self.iface.disconnect()  # 断开所有连接
@@ -562,41 +637,65 @@ class WifiCrackTool:
                             # * 停止线程
                             if self.tool.run==False:
                                 self.win.show_msg.send("破解已终止.\n","red")
+                                # 保存断点信息
+                                self.tool.save_resume_info(ssid, 'json', self.tool.config_settings_data['pwd_txt_path'], i)
                                 self.win.reset_controls_state.send()
                                 return False
                             pwd = pwd_dict['pwd']
                             result = self.connect(ssid,pwd,'json',i)
                             if result and not self.is_auto:
                                 self.win.show_info.send('破解成功',"连接成功，密码：%s\n(已复制到剪切板)"%(pwd))
+                                # 清除断点信息
+                                self.tool.clear_resume_info(ssid)
                                 self.win.reset_controls_state.send()
                                 return True
                             elif result:
+                                # 清除断点信息
+                                self.tool.clear_resume_info(ssid)
                                 return pwd
                         self.win.show_msg.send(f"已尝试完密码字典中[{ssid}]的所有密码，未成功破解\n\n","red")
+                
                 self.win.show_msg.send(f"开始尝试使用密码本破解WiFi[{ssid}]...\n\n","black")
                 with open(self.tool.config_settings_data['pwd_txt_path'],'r', encoding='utf-8', errors='ignore') as lines:
-                        for i,line in enumerate(lines,1):
-                            # * 暂停线程
-                            with self.tool.crack_pause_condition:
-                                if self.tool.paused:
-                                    self.win.show_msg.send("破解已暂停.\n","orange")
-                                    self.tool.crack_pause_condition.wait()
-                            # * 停止线程
-                            if self.tool.run==False:
-                                self.win.show_msg.send("破解已终止.\n","red")
-                                self.win.reset_controls_state.send()
-                                return False
-                            pwd = line.strip()
-                            result = self.connect(ssid,pwd,'txt',i)
-                            if result and not self.is_auto:
-                                self.win.show_info.send('破解成功',"连接成功，密码：%s\n(已复制到剪切板)"%(pwd))
-                                self.win.reset_controls_state.send()
-                                return True
-                            elif result:
-                                return pwd
-                        if not self.is_auto:
-                            self.win.show_info.send('破解失败',"破解失败，已尝试完密码本中所有可能的密码")
+                    current_position = 0
+                    # 根据起始位置跳过前面的行
+                    if start_position > 0:
+                        self.win.show_msg.send(f"从第 {start_position} 行开始继续破解...\n","blue")
+                        for _ in range(start_position - 1):
+                            next(lines, None)
+                            current_position += 1
+                    
+                    for line in lines:
+                        current_position += 1
+                        # * 暂停线程
+                        with self.tool.crack_pause_condition:
+                            if self.tool.paused:
+                                self.win.show_msg.send("破解已暂停.\n","orange")
+                                self.tool.crack_pause_condition.wait()
+                        # * 停止线程
+                        if self.tool.run==False:
+                            self.win.show_msg.send("破解已终止.\n","red")
+                            # 保存断点信息
+                            self.tool.save_resume_info(ssid, 'txt', self.tool.config_settings_data['pwd_txt_path'], current_position)
                             self.win.reset_controls_state.send()
+                            return False
+                        pwd = line.strip()
+                        result = self.connect(ssid,pwd,'txt',current_position)
+                        if result and not self.is_auto:
+                            self.win.show_info.send('破解成功',"连接成功，密码：%s\n(已复制到剪切板)"%(pwd))
+                            # 清除断点信息
+                            self.tool.clear_resume_info(ssid)
+                            self.win.reset_controls_state.send()
+                            return True
+                        elif result:
+                            # 清除断点信息
+                            self.tool.clear_resume_info(ssid)
+                            return pwd
+                    if not self.is_auto:
+                        self.win.show_info.send('破解失败',"破解失败，已尝试完密码本中所有可能的密码")
+                        # 清除断点信息
+                        self.tool.clear_resume_info(ssid)
+                        self.win.reset_controls_state.send()
                 return False
             except Exception as r:
                 self.win.show_error.send('错误警告','破解过程中发生未知错误 %s' %(r))
