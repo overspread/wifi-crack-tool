@@ -78,6 +78,8 @@ class MainWindow(QMainWindow):
         self.show_info = MainWindow.SignThread(self.ui.centralwidget,self.showinfo,str,str)
         self.show_warning = MainWindow.SignThread(self.ui.centralwidget,self.showwarning,str,str)
         self.show_error = MainWindow.SignThread(self.ui.centralwidget,self.showerror,str,str)
+        # 添加用于异步询问的信号
+        self.ask_question = MainWindow.QuestionSignal(self.ui.centralwidget)
         #=================================================================#
 
         self.show_msg.send(f"初始化完成！\n","black")
@@ -108,8 +110,8 @@ class MainWindow(QMainWindow):
         :title 提示框标题
         :message 提示框文本
         '''
-        # 创建QMessageBox实例
-        msg_box = QMessageBox(self.ui.centralwidget)
+        # 创建QMessageBox实例，不设置父对象以避免线程问题
+        msg_box = QMessageBox()
         msg_box.setWindowTitle(title)
         msg_box.setText(message)
         msg_box.setWindowIcon(QIcon(self.icon_path))
@@ -127,8 +129,8 @@ class MainWindow(QMainWindow):
         :title 提示框标题
         :message 提示框文本
         '''
-        # 创建QMessageBox实例
-        msg_box = QMessageBox(self.ui.centralwidget)
+        # 创建QMessageBox实例，不设置父对象以避免线程问题
+        msg_box = QMessageBox()
         msg_box.setWindowTitle(title)
         msg_box.setText(message)
         msg_box.setWindowIcon(QIcon(self.icon_path))
@@ -138,6 +140,27 @@ class MainWindow(QMainWindow):
         msg_box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         # 显示消息框
         msg_box.exec()
+        
+    def ask_user_question(self, title: str, message: str):
+        '''
+        异步询问用户问题
+        :param title: 标题
+        :param message: 消息内容
+        '''
+        # 创建QMessageBox实例，不设置父对象以避免线程问题
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setWindowIcon(QIcon(self.icon_path))
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | 
+                                  QMessageBox.StandardButton.No | 
+                                  QMessageBox.StandardButton.Cancel)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        # 设置窗口标志，使其始终置顶
+        msg_box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        # 显示消息框并返回结果
+        return msg_box.exec()
 
     def set_display_using_pwd_file(self,filename:str="(无)"):
         self.ui.lbl_using_pwd_file.setText(f"正在使用密码本：{filename}")
@@ -179,6 +202,51 @@ class MainWindow(QMainWindow):
             :return:
             """
             self.__update_date.emit(*args)  # 发送信号元组(type,...)
+            
+    class QuestionSignal(QThread):
+        """用于异步提问的信号线程"""
+        
+        # 定义提问信号
+        question_asked = Signal(str, str, QMessageBox.StandardButtons, QMessageBox.StandardButton)
+        
+        def __init__(self, parent: QWidget):
+            super().__init__(parent)
+            self.question_asked.connect(self.show_question_dialog)
+            self.parent_widget = parent
+            self.response = None
+            self.response_received = False
+
+        def send(self, title: str, message: str, buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, default_button=QMessageBox.StandardButton.Yes):
+            """
+            发送提问信号
+            """
+            self.response = None
+            self.response_received = False
+            self.question_asked.emit(title, message, buttons, default_button)
+            
+            # 等待响应
+            while not self.response_received:
+                time.sleep(0.01)
+                
+            return self.response
+
+        def show_question_dialog(self, title: str, message: str, buttons, default_button):
+            """
+            在主线程中显示问题对话框
+            """
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle(title)
+            msg_box.setText(message)
+            msg_box.setWindowIcon(QIcon(self.parent_widget.windowIcon()))
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setStandardButtons(buttons)
+            msg_box.setDefaultButton(default_button)
+            # 设置窗口标志，使其始终置顶
+            msg_box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            
+            # 显示消息框并保存结果
+            self.response = msg_box.exec()
+            self.response_received = True
 
 class WifiCrackTool:
     def __init__(self,win:MainWindow):
@@ -385,16 +453,14 @@ class WifiCrackTool:
             # 检查密码本是否存在
             if self.config_settings_data['pwd_txt_path'] == "" or not os.path.exists(self.config_settings_data['pwd_txt_path']):
                 # 弹出对话框询问用户是否选择密码本
-                reply = QMessageBox.question(self.win, '密码本缺失', '未找到密码本，是否选择密码本文件？',
-                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                           QMessageBox.StandardButton.Yes)
-
+                reply = self.win.ask_question.send('密码本缺失', '未找到密码本，是否选择密码本文件？')
+                
                 if reply == QMessageBox.StandardButton.Yes:
                     if not self.change_pwd_file():
                         return  # 用户取消选择或选择失败
                 else:
                     # 用户选择不选择密码本，给出警告
-                    self.win.showwarning(title='警告', message='未选择密码本，将无法进行破解！')
+                    self.win.showwarning.send(title='警告', message='未选择密码本，将无法进行破解！')
                     return
 
             wifi_name = self.ui.cbo_wifi_name.currentText()
@@ -405,10 +471,8 @@ class WifiCrackTool:
             if not self.pwd_file_changed and wifi_name in self.resume_info and self.resume_info[wifi_name]['pwd_file'] == self.config_settings_data['pwd_txt_path']:
                 # 询问用户是否从断点继续
                 resume_position = self.resume_info[wifi_name]['position']
-                reply = QMessageBox.question(self.win, '断点续传',
-                                           f'发现上次破解 [{wifi_name}] 时在密码本第 {resume_position} 行中断，是否从该位置继续？\n\n选择"是"从断点继续，选择"否"从头开始。',
-                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-                                           QMessageBox.StandardButton.Yes)
+                reply = self.win.ask_question.send('断点续传',
+                                           f'发现上次破解 [{wifi_name}] 时在密码本第 {resume_position} 行中断，是否从该位置继续？\n\n选择"是"从断点继续，选择"否"从头开始。')
 
                 if reply == QMessageBox.StandardButton.Yes:
                     # 从断点继续
@@ -431,10 +495,8 @@ class WifiCrackTool:
 
             # 如果用户选择了特定WiFi且有断点信息，但密码本已更改，则询问是否清除断点信息
             if wifi_name in self.resume_info and self.ui.cbo_wifi_name.currentIndex() != 0 and self.resume_info[wifi_name]['pwd_file'] != self.config_settings_data['pwd_txt_path']:
-                reply = QMessageBox.question(self.win, '密码本变更',
-                                           f'检测到 [{wifi_name}] 使用的密码本已变更，是否清除之前的断点记录？\n\n选择"是"清除断点并从头开始，选择"否"保留断点信息。',
-                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                           QMessageBox.StandardButton.Yes)
+                reply = self.win.ask_question.send('密码本变更',
+                                           f'检测到 [{wifi_name}] 使用的密码本已变更，是否清除之前的断点记录？\n\n选择"是"清除断点并从头开始，选择"否"保留断点信息。')
 
                 if reply == QMessageBox.StandardButton.Yes:
                     self.clear_resume_info(wifi_name)
@@ -483,7 +545,7 @@ class WifiCrackTool:
                 self.paused = False
                 self.crack_pause_condition.notify_all()
         except Exception as r:
-            self.win.showerror(title='错误警告',message='停止过程中发生未知错误 %s' %(r))
+            self.win.showerror.send(title='错误警告',message='停止过程中发生未知错误 %s' %(r))
             self.show_msg('[错误]停止过程中发生未知错误 %s\n\n' %(r),"red")
             self.reset_controls_state()
 
@@ -676,10 +738,8 @@ class WifiCrackTool:
             if not self.tool.pwd_file_changed and ssid in self.tool.resume_info and self.tool.resume_info[ssid]['pwd_file'] == self.tool.config_settings_data['pwd_txt_path']:
                 # 询问用户是否从断点继续
                 resume_position = self.tool.resume_info[ssid]['position']
-                reply = QMessageBox.question(self.win, '断点续传',
-                                           f'发现上次破解 [{ssid}] 时在密码本第 {resume_position} 行中断，是否从该位置继续？\n\n选择"是"从断点继续，选择"否"从头开始。',
-                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                           QMessageBox.StandardButton.Yes)
+                reply = self.tool.win.ask_question.send('断点续传',
+                                           f'发现上次破解 [{ssid}] 时在密码本第 {resume_position} 行中断，是否从该位置继续？\n\n选择"是"从断点继续，选择"否"从头开始。')
 
                 if reply == QMessageBox.StandardButton.Yes:
                     start_position = resume_position
@@ -904,8 +964,6 @@ if __name__ == "__main__":
         window.show()
         app.exec()
 
-        if window.tool.config_settings_data["pwd_txt_path"] == "":
-            window.tool.config_settings_data["pwd_txt_path"] = "passwords.txt"
         with open(window.tool.config_file_path, 'w',encoding='utf-8') as config_file:
             json.dump(window.tool.config_settings_data, config_file, indent=4)
 
