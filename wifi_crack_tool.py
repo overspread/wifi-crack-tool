@@ -617,14 +617,28 @@ class WifiCrackTool:
             try:
                 self.is_auto = True
                 self.win.show_msg.send(f"开始自动破解已扫描到的所有WiFi\n","blue")
-                wifi_info = "WiFi列表：\n"
-                for i,ssid in enumerate(self.ssids,1):
+                
+                # 获取已经破解成功的WiFi名称列表
+                cracked_ssids = [item['ssid'] for item in self.tool.pwd_dict_data]
+                
+                # 过滤掉已经破解成功的WiFi
+                uncracked_ssids = [ssid for ssid in self.ssids if ssid not in cracked_ssids]
+                
+                if not uncracked_ssids:
+                    self.win.show_msg.send("所有WiFi都已破解成功，无需再次破解\n", "green")
+                    self.win.show_info.send('自动破解', "所有WiFi都已破解成功，无需再次破解")
+                    self.is_auto = False
+                    self.win.reset_controls_state.send()
+                    return
+                
+                wifi_info = "待破解WiFi列表：\n"
+                for i,ssid in enumerate(uncracked_ssids,1):
                     wifi_info = wifi_info+f"{('&nbsp;'*40)}({i}){('&nbsp;'*10)}{ssid}\n"
                 self.win.show_msg.send(wifi_info,"blue")
                 
                 pwds = {}
                 colors = {}
-                for ssid in self.ssids:
+                for ssid in uncracked_ssids:
                     pwd = self.crack(ssid)
                     if isinstance(pwd,str):
                         pwds[ssid] = pwd
@@ -635,7 +649,7 @@ class WifiCrackTool:
                 
                 self.win.show_msg.send(f"自动破解已完成！\n","blue")
                 crack_result_info = "结果如下：\n"
-                for i,ssid in enumerate(self.ssids,1):
+                for i,ssid in enumerate(uncracked_ssids,1):
                     crack_result_info = crack_result_info+f"<span style='color:{colors[ssid]}'>{('&nbsp;'*40)}({i}){('&nbsp;'*10)}{ssid}{('&nbsp;'*10)}{pwds[ssid]}</span>\n"
                 
                 self.win.show_msg.send(crack_result_info,"blue")
@@ -657,6 +671,27 @@ class WifiCrackTool:
             :start_position 起始位置（用于断点续传）
             '''
             try:
+                # 首先检查是否已在pwdict.json中存在该WiFi的密码
+                if len(self.tool.pwd_dict_data) > 0:
+                    pwd_dict_list = [ssids for ssids in self.tool.pwd_dict_data if ssids['ssid'] == ssid]
+                    if len(pwd_dict_list) > 0:
+                        self.win.show_msg.send(f"在密码字典中发现已破解的WiFi [{ssid}]，尝试连接...\n\n","green")
+                        for i,pwd_dict in enumerate(pwd_dict_list,1):
+                            # * 停止线程
+                            if self.tool.run==False:
+                                self.win.show_msg.send("破解已终止.\n","red")
+                                self.win.reset_controls_state.send()
+                                return False
+                            pwd = pwd_dict['pwd']
+                            result = self.connect(ssid,pwd,'json',i)
+                            if result and not self.is_auto:
+                                self.win.show_info.send('破解成功',f"使用字典中的密码连接成功，密码：{pwd}\n(已复制到剪切板)")
+                                self.win.reset_controls_state.send()
+                                return True
+                            elif result:
+                                return pwd
+                        self.win.show_msg.send(f"已尝试完密码字典中[{ssid}]的所有密码，均连接失败\n\n","red")
+                
                 self.iface.disconnect()  # 断开所有连接
                 self.win.show_msg.send("正在断开现有连接...\n","black")
                 time.sleep(1)
@@ -667,37 +702,6 @@ class WifiCrackTool:
                     return False
                 self.win.show_msg.send(f"正在准备破解WiFi[{ssid}]...\n\n","black")
 
-                if len(self.tool.pwd_dict_data) > 0:
-                    pwd_dict_list = [ssids for ssids in self.tool.pwd_dict_data if ssids['ssid'] == ssid]
-                    if len(pwd_dict_list) > 0:
-                        self.win.show_msg.send(f"发现密码字典中存在相同SSID：{ssid}，开始尝试破解...\n\n","black")
-                        for i,pwd_dict in enumerate(pwd_dict_list,1):
-                            # * 暂停线程
-                            with self.tool.crack_pause_condition:
-                                if self.tool.paused:
-                                    self.win.show_msg.send("破解已暂停.\n","orange")
-                                    self.tool.crack_pause_condition.wait()
-                            # * 停止线程
-                            if self.tool.run==False:
-                                self.win.show_msg.send("破解已终止.\n","red")
-                                # 保存断点信息
-                                self.tool.save_resume_info(ssid, 'json', self.tool.config_settings_data['pwd_txt_path'], i)
-                                self.win.reset_controls_state.send()
-                                return False
-                            pwd = pwd_dict['pwd']
-                            result = self.connect(ssid,pwd,'json',i)
-                            if result and not self.is_auto:
-                                self.win.show_info.send('破解成功',"连接成功，密码：%s\n(已复制到剪切板)"%(pwd))
-                                # 清除断点信息
-                                self.tool.clear_resume_info(ssid)
-                                self.win.reset_controls_state.send()
-                                return True
-                            elif result:
-                                # 清除断点信息
-                                self.tool.clear_resume_info(ssid)
-                                return pwd
-                        self.win.show_msg.send(f"已尝试完密码字典中[{ssid}]的所有密码，未成功破解\n\n","red")
-                
                 self.win.show_msg.send(f"开始尝试使用密码本破解WiFi[{ssid}]...\n\n","black")
                 with open(self.tool.config_settings_data['pwd_txt_path'],'r', encoding='utf-8', errors='ignore') as lines:
                     current_position = 0
