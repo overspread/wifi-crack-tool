@@ -232,14 +232,28 @@ class WifiCrackTool:
         self.run = False
         self.pwd_file_changed = False
         
+        # 断点续传相关变量
+        self.resume_info = {}  # 存储断点信息
+        self.resume_file_path = self.config_dir_path+'/resume.json'
+        if os.path.exists(self.resume_file_path):
+            with open(self.resume_file_path, 'r', encoding='utf-8') as f:
+                self.resume_info = json.load(f)
+        
         # 创建破解对象
         self.crack = self.Crack(self)
         
         # 判断默认密码本是否存在
         if not os.path.exists(self.config_settings_data['pwd_txt_path']):
-            self.win.showwarning(title='警告', message='默认密码本[%s]不存在！\n请选择密码本'%(self.config_settings_data['pwd_txt_path']))
-            self.config_settings_data['pwd_txt_path'] = ""
-            self.change_pwd_file()
+            reply = QMessageBox.question(self.win, '密码本缺失', '默认密码本[%s]不存在！是否选择新的密码本？'%(self.config_settings_data['pwd_txt_path']),
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                                       QMessageBox.StandardButton.Yes)
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.config_settings_data['pwd_txt_path'] = ""
+                if not self.change_pwd_file():
+                    self.win.showwarning(title='警告', message='未选择密码本，程序将无法正常工作！')
+            else:
+                self.win.showwarning(title='警告', message='默认密码本[%s]不存在！\n程序可能无法正常工作'%(self.config_settings_data['pwd_txt_path']))
         else:
             self.win.set_display_using_pwd_file(self.pwd_txt_name)
     
@@ -264,18 +278,22 @@ class WifiCrackTool:
             temp_filetype = temp_filenames[len(temp_filenames)-1]
             if(temp_filetype==''):
                 self.win.showinfo(title='提示',message='未选择密码本')
-                self.pwd_file_changed = False
+                self.pwd_file_changed = True  # 标记为已更改，即使未选择文件
+                return False
             elif(temp_filetype not in ['txt']):#,'json']):
                 self.win.showerror(title='选择密码本',message='密码本类型错误！\n目前仅支持格式为[txt]的密码本\n您选择的密码本格式为['+temp_filetype+']')
                 self.pwd_file_changed = False
+                return False
             else:
                 self.config_settings_data['pwd_txt_path'] = temp_file_path
                 self.pwd_txt_paths = temp_filepaths
                 self.pwd_txt_name = temp_filename
                 self.win.set_display_using_pwd_file(self.pwd_txt_name)
                 self.pwd_file_changed = True
+                return True
         except Exception as r:
             self.win.showerror(title='错误警告',message='选择密码本时发生未知错误 %s' %(r))
+            return False
 
     # 显示日志消息
     def show_msg(self,msg:str,color:str="black"):
@@ -351,6 +369,16 @@ class WifiCrackTool:
             self.ui.btn_start.setDisabled(True)
             self.ui.cbo_wnic.setDisabled(True)
             self.ui.dbl_scan_time.setDisabled(True)
+            
+            # 检查是否有可用的无线网卡
+            wifi = PyWiFi()
+            wnics = wifi.interfaces()
+            if not wnics or len(wnics) == 0:
+                self.win.showwarning(title='警告', message='未找到任何无线网卡！\n请确保你的电脑拥有无线网卡再继续使用。')
+                self.show_msg('[警告]未找到任何无线网卡！\n\n', "orange")
+                self.reset_controls_state()
+                return
+            
             thread = threading.Thread(target=self.crack.search_wifi,args=())
             thread.daemon = True
             thread.start()
@@ -525,7 +553,22 @@ class WifiCrackTool:
         def search_wifi(self):
             """扫描附近wifi => wifi名称数组"""
             try:
-                self.iface = self.wnics[self.ui.cbo_wnic.currentData()]
+                # 检查是否有可用的无线网卡
+                if not self.wnics or len(self.wnics) == 0:
+                    self.win.show_warning.send('警告', '未找到任何无线网卡！')
+                    self.win.show_msg.send("[警告]未找到任何无线网卡！\n\n", "orange")
+                    self.win.reset_controls_state.send()
+                    return
+                    
+                # 检查选择的网卡索引是否有效
+                wnic_index = self.ui.cbo_wnic.currentData()
+                if wnic_index is None or wnic_index >= len(self.wnics) or wnic_index < 0:
+                    self.win.show_warning.send('警告', '选择的无线网卡无效！')
+                    self.win.show_msg.send("[警告]选择的无线网卡无效！\n\n", "orange")
+                    self.win.reset_controls_state.send()
+                    return
+                    
+                self.iface = self.wnics[wnic_index]
                 name = self.iface.name()#网卡名称
                 self.iface.scan()#扫描AP
                 self.win.show_msg.send(f"正在使用网卡[{name}]扫描WiFi...\n","black")
@@ -558,9 +601,9 @@ class WifiCrackTool:
                 if len(self.ssids) > 0:
                     self.win.set_wifi_current_index.send(0)
             except Exception as r:
-                if r.args[0] == 'NULL pointer access' and self.iface.status() in [const.IFACE_DISCONNECTED,const.IFACE_INACTIVE]:
-                    self.win.show_warning.send('警告',f'你当前设备的WLAN未打开！请打开WLAN后再继续使用。')
-                    self.win.show_msg.send(f"[警告]你当前设备的WLAN未打开！请打开WLAN后再继续使用。\n\n","orange")
+                if "NULL pointer access" in str(r):
+                    self.win.show_warning.send('警告',f'你当前设备的WLAN未打开或无线网卡不可用！请检查WLAN状态后再继续使用。')
+                    self.win.show_msg.send(f"[警告]你当前设备的WLAN未打开或无线网卡不可用！请检查WLAN状态后再继续使用。\n\n","orange")
                 else:
                     self.win.show_error.send('错误警告',f'扫描wifi时发生未知错误 {r}')
                     self.win.show_msg.send(f"[错误]扫描wifi时发生未知错误 {r}\n\n","red")
