@@ -920,14 +920,7 @@ class WifiCrackTool:
                 self.win.reset_controls_state.send()
                 return False
 
-        def connect(self,ssid,pwd,filetype,count):
-            '''
-            连接wifi
-            :ssid wifi名称
-            :pwd wifi密码
-            :filetype 密码本 txt / 密码字典 json
-            :count 已尝试连接的次数
-            '''
+        def connect(self, ssid, pwd, filetype, count):
             try:
                 self.iface.disconnect()  # * 断开所有连接
                 # * 判断安全加密类型
@@ -954,37 +947,41 @@ class WifiCrackTool:
                     profile.akm = akm_v  # * wifi加密算法，一般是 WPA2PSK
                     profile.cipher = const.CIPHER_TYPE_CCMP # * 加密单元
 
-                profile.key = pwd   # * type: ignore #WiFi密码
-                self.iface.remove_network_profile(profile)  # * 删除wifi文件
-                tem_profile = self.iface.add_network_profile(profile)   # * 添加新的WiFi文件
-                self.win.show_msg.send(f"正在进行第{count}次尝试...\n","black")
-                self.iface.connect(tem_profile) # * 连接
+                profile.key = pwd  # WiFi password
+                self.iface.remove_network_profile(profile)  # Remove WiFi profile
+                tem_profile = self.iface.add_network_profile(profile)  # Add new WiFi profile
 
-                # 优化连接速度：使用更短的连接等待时间，并循环检查连接状态
-                connect_start_time = time.time()
-                connect_timeout = min(self.tool.config_settings_data['connect_time'], 5.0)  # 最大不超过5秒
-                check_interval = 0.05  # 每0.05秒检查一次
+                max_retries = 1
+                short_interval = 0.1  # Maintain short interval
 
-                while time.time() - connect_start_time < connect_timeout:
-                    time.sleep(check_interval)
-                    if self.iface.status() == const.IFACE_CONNECTED:    # * 判断是否连接成功
-                        self.win.show_msg.send(f"连接成功，密码：{pwd}\n\n","green")
-                        pyperclip.copy(pwd); # * 将密码复制到剪切板
-                        if filetype != 'json':
-                            self.tool.pwd_dict_data.append({'ssid':ssid,'pwd':pwd})
-                            # * 直接将数据写入文件
-                            with open(self.tool.pwd_dict_path, 'w',encoding='utf-8') as json_file:
-                                json.dump(self.tool.pwd_dict_data, json_file, indent=4)
-                        return True
+                for attempt in range(max_retries):
+                    self.win.show_msg.send(f"正在进行第{count}次尝试...\n", "black")
+                    self.iface.connect(tem_profile)  # Connect
 
-                # 连接超时或失败
-                self.win.show_msg.send(f"连接失败，密码是{pwd}\n\n","red")
-                self.iface.remove_network_profile(profile)  # * 删除wifi文件
+                    connect_start_time = time.time()
+                    connect_timeout = 1.0  # Sufficient timeout for connection attempt
+
+                    while time.time() - connect_start_time < connect_timeout:
+                        time.sleep(0.05)
+                        if self.iface.status() == const.IFACE_CONNECTED:
+                            self.win.show_msg.send(f"连接成功，密码：{pwd}\n\n", "green")
+                            pyperclip.copy(pwd)
+                            if filetype != 'json':
+                                self.tool.pwd_dict_data.append({'ssid': ssid, 'pwd': pwd})
+                                with open(self.tool.pwd_dict_path, 'w', encoding='utf-8') as json_file:
+                                    json.dump(self.tool.pwd_dict_data, json_file, indent=4)
+                            return True
+
+                    time.sleep(short_interval)  # Short interval between retries
+
+                # After all retries exhausted
+                self.win.show_msg.send(f"所有连接尝试失败，密码是{pwd}\n\n", "red")
+                self.iface.remove_network_profile(profile)
                 return False
 
             except Exception as r:
-                self.win.show_error.send('错误警告','连接wifi过程中发生未知错误 %s' %(r))
-                self.win.show_msg.send(f"[错误]连接wifi过程中发生未知错误 {r}\n\n","red")
+                self.win.show_error.send('错误警告', '连接wifi过程中发生未知错误 %s' % (r))
+                self.win.show_msg.send(f"[错误]连接wifi过程中发生未知错误 {r}\n\n", "red")
                 self.win.reset_controls_state.send()
                 return False
 

@@ -1,9 +1,4 @@
 {
-    "CMCC-ksv5-5G": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/【普通】默认常用字典.txt",
-        "position": 1
-    },
     "CMCC-502": {
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
@@ -14,22 +9,12 @@
         "pwd_file": "E:/wifi/password/【普通】默认常用字典.txt",
         "position": 1
     },
-    "CMCC-kkr9-5G": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 1
-    },
     "CMCC-tzan-5G": {
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
     },
     "CMCC-tzan": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 1
-    },
-    "601": {
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
@@ -62,11 +47,6 @@
     "selina_5G": {
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 1
-    },
-    "CMCC-ksv5": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/【普通】默认常用字典.txt",
         "position": 1
     },
     "603": {
@@ -208,5 +188,15 @@
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
+    },
+    "CMCC-ksv5-5G": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 1292
+    },
+    "CMCC-ksv5": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 2804
     }
 }
