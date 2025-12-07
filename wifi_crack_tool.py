@@ -503,6 +503,31 @@ class WifiCrackTool:
 
             # 正常开始（从头开始）
             if self.ui.cbo_wifi_name.currentIndex() == 0:
+                # 收集所有有断点信息的WiFi
+                resume_wifis = []
+                for ssid in self.crack.ssids:
+                    if not self.pwd_file_changed and ssid in self.resume_info and self.resume_info[ssid]['pwd_file'] == self.config_settings_data['pwd_txt_path']:
+                        resume_wifis.append((ssid, self.resume_info[ssid]['position']))
+                
+                # 如果有多个WiFi有断点信息，统一询问
+                if len(resume_wifis) > 0:
+                    wifi_list = '\n'.join([f'{ssid} (位置: {pos})' for ssid, pos in resume_wifis])
+                    reply = self.win.ask_question.send('批量断点续传',
+                                               f'发现以下 {len(resume_wifis)} 个WiFi有断点信息:\n{wifi_list}\n\n是否对所有WiFi都从断点继续？\n\n选择"是"对所有WiFi从断点继续，选择"否"全部从头开始。')
+                    
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # 对于批量破解，我们传递一个特殊标记表示使用断点
+                        thread = threading.Thread(target=self.crack.auto_crack, args=(-1,))
+                        thread.daemon = True
+                        thread.start()
+                        self.pwd_file_changed = False
+                        return
+                    elif reply == QMessageBox.StandardButton.Cancel:
+                        self.run = False
+                        self.reset_controls_state()
+                        self.pwd_file_changed = False
+                        return
+                
                 thread = threading.Thread(target=self.crack.auto_crack)
                 thread.daemon = True
                 thread.start()
@@ -541,6 +566,9 @@ class WifiCrackTool:
         try:
             self.run = False
             self.show_msg("正在尝试终止破解...")
+            # 在停止时自动保存断点信息
+            if hasattr(self.crack, 'current_ssid') and hasattr(self.crack, 'current_position'):
+                self.save_resume_info(self.crack.current_ssid, 'txt', self.config_settings_data['pwd_txt_path'], self.crack.current_position)
             with self.crack_pause_condition:
                 self.paused = False
                 self.crack_pause_condition.notify_all()
@@ -634,10 +662,52 @@ class WifiCrackTool:
 
                 self.iface = self.wnics[wnic_index]
                 name = self.iface.name()#网卡名称
-                self.iface.scan()#扫描AP
-                self.win.show_msg.send(f"正在使用网卡[{name}]扫描WiFi...\n","black")
+                
+                # 检查网卡状态
+                try:
+                    iface_status = self.iface.status()
+                    self.win.show_msg.send(f"网卡状态: {iface_status}\n","blue")
+                    
+                    # 如果网卡状态异常，给出警告
+                    if iface_status not in [const.IFACE_DISCONNECTED, const.IFACE_INACTIVE, const.IFACE_SCANNING, const.IFACE_CONNECTED]:
+                        self.win.show_warning.send('警告',f'网卡状态异常！当前状态: {iface_status}\n请检查WLAN是否已打开。')
+                        self.win.show_msg.send(f"[警告]网卡状态异常！当前状态: {iface_status}\n请检查WLAN是否已打开。\n\n","orange")
+                        self.win.reset_controls_state.send()
+                        return
+                except Exception as status_error:
+                    self.win.show_warning.send('警告',f'无法获取网卡状态！\n错误: {status_error}\n请检查WLAN是否已打开。')
+                    self.win.show_msg.send(f"[警告]无法获取网卡状态！\n错误: {status_error}\n请检查WLAN是否已打开。\n\n","orange")
+                    self.win.reset_controls_state.send()
+                    return
+                
+                # 尝试启动扫描
+                try:
+                    self.iface.scan()#扫描AP
+                    self.win.show_msg.send(f"正在使用网卡[{name}]扫描WiFi...\n","black")
+                except Exception as scan_error:
+                    self.win.show_warning.send('警告',f'启动WiFi扫描失败！\n\n错误: {type(scan_error).__name__}: {scan_error}\n\n可能原因：\n1. WLAN服务未启动\n2. 网卡驱动问题\n3. WiFi功能被禁用\n\n请检查：\n- Windows设置中WiFi是否已打开\n- WLAN AutoConfig服务是否正在运行')
+                    self.win.show_msg.send(f"[警告]启动WiFi扫描失败！错误: {type(scan_error).__name__}: {scan_error}\n\n","orange")
+                    self.win.reset_controls_state.send()
+                    return
+                
                 time.sleep(self.tool.config_settings_data['scan_time']) # 由于不同网卡的扫描时长不同，建议调整合适的延时时间
-                ap_list = self.iface.scan_results()#扫描结果列表
+                
+                # 尝试获取扫描结果
+                try:
+                    ap_list = self.iface.scan_results()#扫描结果列表
+                    
+                    # 检查扫描结果是否为None
+                    if ap_list is None:
+                        self.win.show_warning.send('警告','扫描结果为空（None）！\n\n这通常表示：\n1. WLAN服务未正确启动\n2. WiFi适配器被禁用\n3. 驱动程序问题\n\n请尝试：\n1. 关闭WiFi后重新打开\n2. 重启WLAN AutoConfig服务\n3. 重启电脑')
+                        self.win.show_msg.send("[警告]扫描结果为空！请检查WLAN服务状态。\n\n","orange")
+                        self.win.reset_controls_state.send()
+                        return
+                        
+                except Exception as result_error:
+                    self.win.show_warning.send('警告',f'获取扫描结果失败！\n\n错误: {type(result_error).__name__}: {result_error}\n\n这通常表示WLAN服务未正确运行。\n\n请尝试：\n1. 打开"服务"（services.msc）\n2. 找到"WLAN AutoConfig"服务\n3. 确保该服务正在运行\n4. 如果未运行，右键点击"启动"')
+                    self.win.show_msg.send(f"[警告]获取扫描结果失败！错误: {type(result_error).__name__}: {result_error}\n\n","orange")
+                    self.win.reset_controls_state.send()
+                    return
 
                 # 去除重复AP项
                 ap_dic_tmp = {}
@@ -665,18 +735,24 @@ class WifiCrackTool:
                 if len(self.ssids) > 0:
                     self.win.set_wifi_current_index.send(0)
             except Exception as r:
-                if "NULL pointer access" in str(r):
-                    self.win.show_warning.send('警告',f'你当前设备的WLAN未打开或无线网卡不可用！请检查WLAN状态后再继续使用。')
+                error_msg = str(r)
+                error_type = type(r).__name__
+                
+                # 记录详细的错误信息用于调试
+                self.win.show_msg.send(f"[调试]异常类型: {error_type}, 异常信息: {error_msg}\n","blue")
+                
+                if "NULL pointer access" in error_msg or "NoneType" in error_msg or error_type == "OSError":
+                    self.win.show_warning.send('警告',f'你当前设备的WLAN未打开或无线网卡不可用！\n\n详细信息: {error_type}: {error_msg}\n\n请检查WLAN状态后再继续使用。')
                     self.win.show_msg.send(f"[警告]你当前设备的WLAN未打开或无线网卡不可用！请检查WLAN状态后再继续使用。\n\n","orange")
                 else:
-                    self.win.show_error.send('错误警告',f'扫描wifi时发生未知错误 {r}')
-                    self.win.show_msg.send(f"[错误]扫描wifi时发生未知错误 {r}\n\n","red")
+                    self.win.show_error.send('错误警告',f'扫描wifi时发生未知错误\n\n异常类型: {error_type}\n异常信息: {error_msg}')
+                    self.win.show_msg.send(f"[错误]扫描wifi时发生未知错误 ({error_type}): {error_msg}\n\n","red")
                 self.win.reset_controls_state.send()
 
         def auto_crack(self, start_position:int=0):
             '''
             自动破解所有WiFi
-            :start_position 起始位置（用于断点续传，但自动模式下暂时不使用）
+            :start_position 起始位置（用于断点续传，-1表示使用统一断点处理）
             '''
             try:
                 self.is_auto = True
@@ -703,7 +779,17 @@ class WifiCrackTool:
                 pwds = {}
                 colors = {}
                 for ssid in uncracked_ssids:
-                    pwd = self.crack_single_wifi(ssid)
+                    # 如果start_position为-1，表示使用统一断点处理
+                    if start_position == -1:
+                        # 检查是否有该WiFi的断点信息
+                        if not self.tool.pwd_file_changed and ssid in self.tool.resume_info and self.tool.resume_info[ssid]['pwd_file'] == self.tool.config_settings_data['pwd_txt_path']:
+                            # 直接使用断点位置
+                            start_pos = self.tool.resume_info[ssid]['position']
+                        else:
+                            start_pos = 0
+                        pwd = self.crack(ssid, start_pos)
+                    else:
+                        pwd = self.crack_single_wifi(ssid)
                     if isinstance(pwd,str):
                         pwds[ssid] = pwd
                         colors[ssid] = "green"
@@ -736,13 +822,8 @@ class WifiCrackTool:
             # 检查是否有该WiFi的断点信息
             start_position = 0
             if not self.tool.pwd_file_changed and ssid in self.tool.resume_info and self.tool.resume_info[ssid]['pwd_file'] == self.tool.config_settings_data['pwd_txt_path']:
-                # 询问用户是否从断点继续
-                resume_position = self.tool.resume_info[ssid]['position']
-                reply = self.tool.win.ask_question.send('断点续传',
-                                           f'发现上次破解 [{ssid}] 时在密码本第 {resume_position} 行中断，是否从该位置继续？\n\n选择"是"从断点继续，选择"否"从头开始。')
-
-                if reply == QMessageBox.StandardButton.Yes:
-                    start_position = resume_position
+                # 直接使用断点位置
+                start_position = self.tool.resume_info[ssid]['position']
 
             # 调用原有的破解方法
             return self.crack(ssid, start_position)
@@ -754,6 +835,9 @@ class WifiCrackTool:
             :start_position 起始位置（用于断点续传）
             '''
             try:
+                # 记录当前破解的SSID，用于断点续传
+                self.current_ssid = ssid
+                
                 # 首先检查是否已在pwdict.json中存在该WiFi的密码
                 if len(self.tool.pwd_dict_data) > 0:
                     pwd_dict_list = [ssids for ssids in self.tool.pwd_dict_data if ssids['ssid'] == ssid]
@@ -797,6 +881,9 @@ class WifiCrackTool:
 
                     for line in lines:
                         current_position += 1
+                        # 记录当前位置，用于断点续传
+                        self.current_position = current_position
+                        
                         # * 暂停线程
                         with self.tool.crack_pause_condition:
                             if self.tool.paused:
@@ -928,7 +1015,7 @@ if __name__ == "__main__":
                 __mutex = acquire_mutex()
 
             window = MainWindow(__mutex)
-
+            window.show()
         elif system == 'Linux':
             print('当前系统是 Linux')
             import fcntl
@@ -953,6 +1040,7 @@ if __name__ == "__main__":
                 __lock = acquire_lock()
 
             window = MainWindow(__lock)
+            window.show()
 
         elif system == 'Darwin':  # macOS
             print('当前系统是 macOS, 暂不支持')
@@ -961,7 +1049,6 @@ if __name__ == "__main__":
             print(f'当前系统为 {system}, 暂不支持')
             sys.exit()
 
-        window.show()
         app.exec()
 
         with open(window.tool.config_file_path, 'w',encoding='utf-8') as config_file:
