@@ -1,0 +1,21 @@
+{
+  "test_time": "2025-12-08T08:37:59.238941",
+  "original_version": {
+    "duration": 0.037634849548339844,
+    "avg_cpu": 21.0,
+    "avg_memory": 56.1,
+    "total_attempts": 1000
+  },
+  "optimized_version": {
+    "duration": 0.0022101402282714844,
+    "avg_cpu": 10.0,
+    "avg_memory": 56.1,
+    "total_attempts": 1000,
+    "effective_attempts": 200
+  },
+  "improvements": {
+    "time_improvement_percent": 94.12741048577148,
+    "cpu_improvement_percent": 52.38095238095239,
+    "memory_improvement_percent": 0.0
+  }
+}
