@@ -2,15 +2,23 @@
 # Compiled and build artifacts
 *.pyc
 __pycache__/
+*.o
+*.obj
+*.out
 
 # Dependencies
 .venv/
 venv/
+pip-wheel-metadata/
+.tox/
+.eggs/
+*.egg-info/
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
+*.swo
 
 # Environment
 .env
@@ -20,14 +28,17 @@ venv/
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Performance and coverage
+# Coverage reports
 .coverage
 coverage/
 htmlcov/
 
-# Distribution artifacts
-dist/
-build/
-*.egg-info/
+# Python specific
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
 ```
