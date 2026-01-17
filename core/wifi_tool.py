@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-WiFi Crack Tool - Core functionality
+WiFi Crack Tool - Core functionality with async support
 """
 import os
+import asyncio
 import datetime
 import threading
 from pathlib import Path
@@ -14,13 +15,15 @@ from .constants import Colors, Messages, Defaults
 from .config import ConfigManager
 from .logger import get_logger, setup_logger
 from .crack import Crack
+from .crack_async import AsyncCrack
+from .async_runner import CancellableTask
 
 if TYPE_CHECKING:
     from ui.main_window import MainWindow
 
 
 class WifiCrackTool:
-    """Main WiFi crack tool controller"""
+    """Main WiFi crack tool controller with async support"""
     
     def __init__(self, win: 'MainWindow'):
         """
@@ -41,18 +44,42 @@ class WifiCrackTool:
         self.ui.dbl_scan_time.setValue(self.config.scan_time)
         self.ui.dbl_connect_time.setValue(self.config.connect_time)
         
-        # Threading controls
+        # Threading controls (for sync compatibility)
         self.crack_pause_condition = threading.Condition()
         self.paused = False
         self.run = False
         self.pwd_file_changed = False
         
-        # Create crack instance
+        # Create both sync and async crack instances
         self.crack = Crack(self)
+        self.async_crack = AsyncCrack(self)
+        
+        # Async task management
+        self._current_task: Optional[CancellableTask] = None
+        self._use_async = True  # Flag to enable/disable async mode
         
         # Update password file display
         pwd_display = self.config.pwd_txt_name if self.config.pwd_file_exists() else Messages.NO_PWD_FILE
         self.win.set_display_using_pwd_file(pwd_display)
+    
+    # ======================== Async Task Management ========================
+    
+    def _start_async_task(self, coro) -> None:
+        """
+        Start an async task
+        
+        :param coro: Coroutine to run
+        """
+        if self._current_task is None:
+            self._current_task = CancellableTask()
+        
+        self._current_task.start(coro)
+    
+    def _cancel_current_task(self) -> None:
+        """Cancel the current async task if running"""
+        if self._current_task is not None:
+            self._current_task.cancel()
+            self.async_crack.cancel()
     
     # ======================== Settings ========================
     
@@ -197,7 +224,7 @@ class WifiCrackTool:
     # ======================== WiFi Operations ========================
     
     def refresh_wifi(self) -> None:
-        """Refresh WiFi list"""
+        """Refresh WiFi list (async version)"""
         try:
             self.ui.cbo_wifi_name.clear()
             self.ui.cbo_wifi_name.addItem('——全部——')
@@ -218,8 +245,13 @@ class WifiCrackTool:
                 self.reset_controls_state()
                 return
             
-            thread = threading.Thread(target=self.crack.search_wifi, daemon=True)
-            thread.start()
+            if self._use_async:
+                # Use async version
+                self._start_async_task(self.async_crack.search_wifi())
+            else:
+                # Fallback to sync version with threading
+                thread = threading.Thread(target=self.crack.search_wifi, daemon=True)
+                thread.start()
             
         except Exception as e:
             self.logger.error(f"扫描wifi时发生错误: {e}")
@@ -230,7 +262,7 @@ class WifiCrackTool:
     # ======================== Crack Operations ========================
     
     def start(self) -> None:
-        """Start cracking process"""
+        """Start cracking process (async version)"""
         try:
             # Check password file
             if not self.config.pwd_file_exists():
@@ -262,7 +294,7 @@ class WifiCrackTool:
                 )
                 
                 if reply == QMessageBox.StandardButton.Yes:
-                    self._start_crack_thread(wifi_name, resume_position)
+                    self._start_crack(wifi_name, resume_position)
                     self.pwd_file_changed = False
                     return
                 elif reply == QMessageBox.StandardButton.Cancel:
@@ -288,7 +320,7 @@ class WifiCrackTool:
             if self.ui.cbo_wifi_name.currentIndex() == 0:
                 self._handle_batch_crack_resume()
             else:
-                self._start_crack_thread(wifi_name)
+                self._start_crack(wifi_name)
             
             self.pwd_file_changed = False
             
@@ -303,9 +335,12 @@ class WifiCrackTool:
         resume_info = self.config.resume_info
         pwd_file = self.config.pwd_txt_path
         
+        # Use async_crack's ssids for async mode
+        ssids = self.async_crack.ssids if self._use_async else self.crack.ssids
+        
         # Collect WiFis with resume info
         resume_wifis = []
-        for ssid in self.crack.ssids:
+        for ssid in ssids:
             if (not self.pwd_file_changed and 
                 ssid in resume_info and 
                 resume_info[ssid]['pwd_file'] == pwd_file):
@@ -319,37 +354,50 @@ class WifiCrackTool:
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                thread = threading.Thread(target=self.crack.auto_crack, args=(-1,), daemon=True)
-                thread.start()
+                self._start_auto_crack(-1)
                 return
             elif reply == QMessageBox.StandardButton.Cancel:
                 self.run = False
                 self.reset_controls_state()
                 return
         
-        thread = threading.Thread(target=self.crack.auto_crack, daemon=True)
-        thread.start()
+        self._start_auto_crack(0)
     
-    def _start_crack_thread(self, wifi_name: str, start_position: int = 0) -> None:
+    def _start_crack(self, wifi_name: str, start_position: int = 0) -> None:
         """
-        Start crack thread
+        Start crack operation (async or sync based on mode)
         
         :param wifi_name: WiFi name to crack
         :param start_position: Starting position for resume
         """
         if self.ui.cbo_wifi_name.currentIndex() == 0:
+            self._start_auto_crack(start_position)
+        else:
+            if self._use_async:
+                self._start_async_task(self.async_crack.crack(wifi_name, start_position))
+            else:
+                thread = threading.Thread(
+                    target=self.crack.crack, 
+                    args=(wifi_name, start_position), 
+                    daemon=True
+                )
+                thread.start()
+    
+    def _start_auto_crack(self, start_position: int = 0) -> None:
+        """
+        Start auto crack operation
+        
+        :param start_position: Starting position for resume
+        """
+        if self._use_async:
+            self._start_async_task(self.async_crack.auto_crack(start_position))
+        else:
             thread = threading.Thread(
                 target=self.crack.auto_crack, 
                 args=(start_position,), 
                 daemon=True
             )
-        else:
-            thread = threading.Thread(
-                target=self.crack.crack, 
-                args=(wifi_name, start_position), 
-                daemon=True
-            )
-        thread.start()
+            thread.start()
     
     def pause(self) -> None:
         """Pause or resume cracking"""
@@ -377,13 +425,18 @@ class WifiCrackTool:
             self.run = False
             self.show_msg("正在尝试终止破解...")
             
+            # Cancel async task if running
+            if self._use_async:
+                self._cancel_current_task()
+            
             # Save resume info
-            if hasattr(self.crack, 'current_ssid') and hasattr(self.crack, 'current_position'):
+            crack_instance = self.async_crack if self._use_async else self.crack
+            if hasattr(crack_instance, 'current_ssid') and hasattr(crack_instance, 'current_position'):
                 self.config.save_resume_info(
-                    self.crack.current_ssid,
+                    crack_instance.current_ssid,
                     'txt',
                     self.config.pwd_txt_path,
-                    self.crack.current_position
+                    crack_instance.current_position
                 )
             
             with self.crack_pause_condition:

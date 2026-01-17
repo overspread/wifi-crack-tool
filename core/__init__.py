@@ -7,6 +7,8 @@ from .logger import setup_logger, get_logger
 from .config import ConfigManager
 from .wifi_tool import WifiCrackTool
 from .crack import Crack
+from .crack_async import AsyncCrack
+from .async_runner import run_in_thread, CancellableTask, shutdown_executor
 
 __all__ = [
     'Colors',
@@ -16,5 +18,10 @@ __all__ = [
     'get_logger',
     'ConfigManager',
     'WifiCrackTool',
-    'Crack'
+    'Crack',
+    'AsyncCrack',
+    'run_in_thread',
+    'CancellableTask',
+    'shutdown_executor'
 ]
+

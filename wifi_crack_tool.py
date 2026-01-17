@@ -1,9 +1,7 @@
 # -*- coding: UTF-8 -*-
 """
 WiFi密码暴力破解工具
-Author: 白恒aead
-Repositories: https://github.com/baihengaead/wifi-crack-tool
-Version: 1.3.0 (Refactored)
+Version: 1.4.0 (Async Refactored)
 
 优化内容:
 - 模块化重构，拆分为 core/ 和 ui/ 模块
@@ -13,18 +11,22 @@ Version: 1.3.0 (Refactored)
 - 使用 itertools.islice 优化密码读取
 - 使用 QWaitCondition 替代忙等待
 - 完善类型注解
+- 异步化改造，使用 qasync 实现非阻塞 UI
 """
 import sys
+import asyncio
 import platform
 import ctypes
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 from pywifi import PyWiFi
+import qasync
 
 from ui.main_window import MainWindow
 from core.wifi_tool import WifiCrackTool
 from core.constants import Colors
+from core.async_runner import shutdown_executor
 
 
 def acquire_windows_mutex():
@@ -87,6 +89,29 @@ def release_linux_lock(lock):
     os.remove(LOCKFILE)
 
 
+async def async_main(app: QApplication, window: 'MainWindow', tool: 'WifiCrackTool'):
+    """
+    Async main coroutine
+    
+    :param app: QApplication instance
+    :param window: Main window instance
+    :param tool: WifiCrackTool instance
+    """
+    # Show initialization message
+    window.show_msg.send(f"初始化完成！(异步模式)\n", Colors.BLACK)
+    
+    # Show window
+    window.show()
+    
+    # Wait for application to close
+    # The event loop will keep running until the window is closed
+    while window.isVisible():
+        await asyncio.sleep(0.1)
+    
+    # Save settings on exit
+    tool.save_settings()
+
+
 def main():
     """Main entry point"""
     app = QApplication(sys.argv)
@@ -127,18 +152,18 @@ def main():
         window.init_signals(tool)
         window.bind_events(tool)
         
-        # Show initialization message
-        window.show_msg.send(f"初始化完成！\n", Colors.BLACK)
+        # Create async event loop with qasync
+        loop = qasync.QEventLoop(app)
+        asyncio.set_event_loop(loop)
         
-        # Show window and run app
-        window.show()
-        app.exec()
-        
-        # Save settings on exit
-        tool.save_settings()
+        # Run the async main
+        with loop:
+            loop.run_until_complete(async_main(app, window, tool))
         
     finally:
         # Cleanup
+        shutdown_executor()
+        
         if system == 'Windows' and mutex_or_lock is not None:
             import win32api
             win32api.CloseHandle(mutex_or_lock)

@@ -4,25 +4,10 @@
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
     },
-    "mengyuan123": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/【普通】默认常用字典.txt",
-        "position": 1
-    },
     "CMCC-tzan-5G": {
         "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 1
-    },
-    "CMCC-tzan": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 1
-    },
-    "603_5G": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 9
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 3775
     },
     "CMCC-mw74": {
         "pwd_source": "txt",
@@ -44,11 +29,6 @@
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
     },
-    "selina_5G": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 1
-    },
     "603": {
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
@@ -63,11 +43,6 @@
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
-    },
-    "selina": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 9
     },
     "401": {
         "pwd_source": "txt",
@@ -139,11 +114,6 @@
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
         "position": 1
     },
-    "荣耀Magic6至臻版": {
-        "pwd_source": "txt",
-        "pwd_file": "E:/wifi/password/wifiPassword.txt",
-        "position": 120
-    },
     "ChinaNet-604-2.4G": {
         "pwd_source": "txt",
         "pwd_file": "E:/wifi/password/wifiPassword.txt",
@@ -192,11 +162,41 @@
     "CMCC-ksv5-5G": {
         "pwd_source": "txt",
         "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
-        "position": 1292
+        "position": 12
     },
     "CMCC-ksv5": {
         "pwd_source": "txt",
         "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
         "position": 2804
+    },
+    "selina_5G": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 4159
+    },
+    "mengyuan123": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 9497
+    },
+    "801": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 3775
+    },
+    "CMCC-tzan": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 27
+    },
+    "selina": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 3478
+    },
+    "荣耀Magic6至臻版": {
+        "pwd_source": "txt",
+        "pwd_file": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+        "position": 1
     }
 }

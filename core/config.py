@@ -129,11 +129,34 @@ class ConfigManager:
             self.logger.warning(f"Failed to clear resume info: {e}")
     
     def _load_pwd_dict(self) -> List[Dict[str, str]]:
-        """Load password dictionary from file"""
+        """Load password dictionary from file and remove duplicates"""
         if self.pwd_dict_file.exists():
             try:
                 with open(self.pwd_dict_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                
+                # 去重：保留每个SSID的最后一个条目（最新的密码）
+                seen_ssids: Dict[str, int] = {}
+                deduplicated = []
+                
+                for entry in data:
+                    ssid = entry.get('ssid')
+                    if ssid in seen_ssids:
+                        # 已存在，更新为新的
+                        deduplicated[seen_ssids[ssid]] = entry
+                    else:
+                        # 新SSID，添加
+                        seen_ssids[ssid] = len(deduplicated)
+                        deduplicated.append(entry)
+                
+                # 如果有去重，保存清理后的数据
+                if len(deduplicated) < len(data):
+                    self.logger.info(f"清理了 {len(data) - len(deduplicated)} 个重复的WiFi记录")
+                    with open(self.pwd_dict_file, 'w', encoding='utf-8') as f:
+                        json.dump(deduplicated, f, indent=4, ensure_ascii=False)
+                
+                return deduplicated
+                
             except (json.JSONDecodeError, IOError) as e:
                 self.logger.warning(f"Failed to load password dict: {e}")
                 return []
@@ -141,13 +164,26 @@ class ConfigManager:
     
     def save_pwd_dict(self, ssid: str, pwd: str) -> None:
         """
-        Add a new password to the dictionary and save
+        Add or update a password in the dictionary and save
         
         :param ssid: WiFi SSID
         :param pwd: WiFi password
         """
         try:
-            self.pwd_dict_data.append({'ssid': ssid, 'pwd': pwd})
+            # 检查是否已存在相同SSID，如果存在则更新
+            existing_index = None
+            for i, entry in enumerate(self.pwd_dict_data):
+                if entry.get('ssid') == ssid:
+                    existing_index = i
+                    break
+            
+            if existing_index is not None:
+                # 更新已存在的条目
+                self.pwd_dict_data[existing_index]['pwd'] = pwd
+            else:
+                # 添加新条目
+                self.pwd_dict_data.append({'ssid': ssid, 'pwd': pwd})
+            
             with open(self.pwd_dict_file, 'w', encoding='utf-8') as f:
                 json.dump(self.pwd_dict_data, f, indent=4, ensure_ascii=False)
         except IOError as e:

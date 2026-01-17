@@ -4,3 +4,4 @@ pyperclip>=1.9.0
 comtypes>=1.4.4
 pyinstaller>=6.9.0
 pywin32>=306
+qasync>=0.24.0

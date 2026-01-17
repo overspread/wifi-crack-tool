@@ -58,7 +58,27 @@ class Defaults:
     PWD_TXT_PATH = "passwords.txt"
     CONNECT_TIMEOUT = 1.0
     CHECK_INTERVAL = 0.05
-    MAX_RETRIES = 1
+    MAX_RETRIES = 3  # 重试次数，用于网络问题
+    AUTH_FAIL_THRESHOLD = 0.8  # 认证失败判定阈值（秒）
+    
+    # WiFi 可用性检测配置
+    WIFI_CHECK_INTERVAL = 10  # 每N次密码尝试检测一次WiFi可用性
+    WIFI_SCAN_WAIT_TIME = 4.0  # 扫描等待时间（秒）
+    WIFI_SCAN_RETRY_WAIT = 1.0  # 扫描重试等待时间（秒）
+    WIFI_DISCONNECT_WAIT = 0.5  # 断开连接等待时间（秒）
+    WIFI_CHECK_RETRY_COUNT = 2  # WiFi可用性检测扫描次数
+    WIFI_UNAVAILABLE_ROLLBACK = 11  # WiFi不可用时回退的密码数
+    
+    # 连接检测配置
+    CHECK_INTERVAL_FAST = 0.03  # 连接中时快速检测间隔（秒）
+    CHECK_INTERVAL_SLOW = 0.08  # 等待时慢速检测间隔（秒）
+    DISCONNECT_WAIT_TIMEOUT = 1.0  # 断开连接等待超时（秒）
+    DISCONNECT_CHECK_INTERVAL = 0.05  # 断开连接检测间隔（秒）
+    POST_FAIL_WAIT = 0.1  # 连接失败后等待时间（秒）
+    
+    # 密码验证配置
+    MIN_PASSWORD_LENGTH = 8  # WiFi密码最小长度
+    MAX_PASSWORD_LENGTH = 63  # WiFi密码最大长度
     
     # Directory names
     CONFIG_DIR = "config"
