@@ -78,7 +78,9 @@ class MainWindow(QMainWindow):
     
     def _init_controls(self) -> None:
         """Initialize control states"""
-        from core.constants import SecurityTypes
+        from core.constants import SecurityTypes, Defaults
+        from PySide6.QtWidgets import QSpinBox, QLabel
+        from PySide6.QtCore import QRect
         
         self.ui.cbo_wifi_name.addItem('——全部——')
         self.ui.cbo_security_type.addItems([SecurityTypes.AUTO] + SecurityTypes.TYPES)
@@ -93,6 +95,85 @@ class MainWindow(QMainWindow):
         self.ui.btn_stop.setDisabled(True)
         
         self.ui.txt_log_msg_info.setReadOnly(True)
+        
+        # ==================== 动态添加高级设置控件 ====================
+        # 在安全类型下方添加一行高级设置
+        
+        # 调整窗口和控件位置来容纳新控件
+        row_height = 25  # 新增一行的高度
+        
+        # 将无线网卡行及以下的控件都往下移动
+        for widget in [
+            self.ui.lbl_wnic, self.ui.cbo_wnic,
+            self.ui.lbl_using_pwd_file,
+            self.ui.splitter,
+            self.ui.txt_log_msg_info
+        ]:
+            rect = widget.geometry()
+            widget.setGeometry(QRect(rect.x(), rect.y() + row_height, rect.width(), rect.height()))
+        
+        # 调整窗口高度
+        current_height = self.ui.centralwidget.maximumHeight()
+        new_height = current_height + row_height
+        self.ui.centralwidget.setMaximumSize(529, new_height)
+        self.setMaximumSize(529, new_height + 20)
+        self.setMinimumSize(500, new_height + 20)
+        self.resize(529, new_height + 20)
+        
+        # 检测间隔设置 (每N次密码尝试检测一次) - y=65 行
+        y_pos = 65
+        
+        self.lbl_check_interval = QLabel(self.ui.centralwidget)
+        self.lbl_check_interval.setObjectName("lbl_check_interval")
+        self.lbl_check_interval.setGeometry(QRect(50, y_pos, 71, 20))
+        self.lbl_check_interval.setText("检测间隔:")
+        self.lbl_check_interval.setToolTip("每隔多少次密码尝试检测一次WiFi是否可用")
+        
+        self.spn_check_interval = QSpinBox(self.ui.centralwidget)
+        self.spn_check_interval.setObjectName("spn_check_interval")
+        self.spn_check_interval.setGeometry(QRect(120, y_pos, 55, 22))
+        self.spn_check_interval.setMinimum(10)
+        self.spn_check_interval.setMaximum(1000)
+        self.spn_check_interval.setValue(Defaults.WIFI_CHECK_INTERVAL)
+        self.spn_check_interval.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.spn_check_interval.setToolTip("每隔多少次密码尝试检测一次WiFi是否可用（建议50-100）")
+        
+        # WiFi不可用时回退次数
+        self.lbl_rollback = QLabel(self.ui.centralwidget)
+        self.lbl_rollback.setObjectName("lbl_rollback")
+        self.lbl_rollback.setGeometry(QRect(185, y_pos, 65, 20))
+        self.lbl_rollback.setText("回退次数:")
+        self.lbl_rollback.setToolTip("WiFi不可用时，密码位置回退多少次")
+        
+        self.spn_rollback = QSpinBox(self.ui.centralwidget)
+        self.spn_rollback.setObjectName("spn_rollback")
+        self.spn_rollback.setGeometry(QRect(250, y_pos, 45, 22))
+        self.spn_rollback.setMinimum(0)
+        self.spn_rollback.setMaximum(100)
+        self.spn_rollback.setValue(Defaults.WIFI_UNAVAILABLE_ROLLBACK)
+        self.spn_rollback.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.spn_rollback.setToolTip("WiFi不可用时，保存进度时回退的密码数量")
+        
+        # 连接重试次数
+        self.lbl_max_retries = QLabel(self.ui.centralwidget)
+        self.lbl_max_retries.setObjectName("lbl_max_retries")
+        self.lbl_max_retries.setGeometry(QRect(305, y_pos, 65, 20))
+        self.lbl_max_retries.setText("重试次数:")
+        self.lbl_max_retries.setToolTip("WiFi连接超时后重试的次数")
+        
+        self.spn_max_retries = QSpinBox(self.ui.centralwidget)
+        self.spn_max_retries.setObjectName("spn_max_retries")
+        self.spn_max_retries.setGeometry(QRect(370, y_pos, 35, 22))
+        self.spn_max_retries.setMinimum(1)
+        self.spn_max_retries.setMaximum(10)
+        self.spn_max_retries.setValue(Defaults.MAX_RETRIES)
+        self.spn_max_retries.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.spn_max_retries.setToolTip("连接超时后重试的次数（网络不稳定时可增加）")
+        
+        # 将这些控件添加为 UI 属性以便后续访问
+        self.ui.spn_check_interval = self.spn_check_interval
+        self.ui.spn_rollback = self.spn_rollback
+        self.ui.spn_max_retries = self.spn_max_retries
     
     def init_signals(self, tool: 'WifiCrackTool') -> None:
         """
@@ -128,6 +209,14 @@ class MainWindow(QMainWindow):
         self.ui.btn_stop.clicked.connect(tool.stop)
         self.ui.dbl_scan_time.valueChanged.connect(tool.change_scan_time)
         self.ui.dbl_connect_time.valueChanged.connect(tool.change_connect_time)
+        
+        # Bind advanced settings events
+        if hasattr(self.ui, 'spn_check_interval'):
+            self.ui.spn_check_interval.valueChanged.connect(tool.change_check_interval)
+        if hasattr(self.ui, 'spn_rollback'):
+            self.ui.spn_rollback.valueChanged.connect(tool.change_rollback)
+        if hasattr(self.ui, 'spn_max_retries'):
+            self.ui.spn_max_retries.valueChanged.connect(tool.change_max_retries)
     
     def set_display_using_pwd_file(self, filename: str = "(无)") -> None:
         """

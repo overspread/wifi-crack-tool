@@ -50,7 +50,10 @@ class ConfigManager:
         default_settings = {
             'scan_time': Defaults.SCAN_TIME,
             'connect_time': Defaults.CONNECT_TIME,
-            'pwd_txt_path': Defaults.PWD_TXT_PATH
+            'pwd_txt_path': Defaults.PWD_TXT_PATH,
+            'wifi_check_interval': Defaults.WIFI_CHECK_INTERVAL,
+            'wifi_rollback': Defaults.WIFI_UNAVAILABLE_ROLLBACK,
+            'max_retries': Defaults.MAX_RETRIES
         }
         
         if self.settings_file.exists():
@@ -231,3 +234,33 @@ class ConfigManager:
         """Check if password file exists"""
         path = self.pwd_txt_path
         return bool(path) and Path(path).exists()
+    
+    @property
+    def wifi_check_interval(self) -> int:
+        """Get WiFi check interval (check every N password attempts)"""
+        return self.settings.get('wifi_check_interval', Defaults.WIFI_CHECK_INTERVAL)
+    
+    @wifi_check_interval.setter
+    def wifi_check_interval(self, value: int) -> None:
+        """Set WiFi check interval"""
+        self.settings['wifi_check_interval'] = value
+    
+    @property
+    def wifi_rollback(self) -> int:
+        """Get WiFi unavailable rollback count"""
+        return self.settings.get('wifi_rollback', Defaults.WIFI_UNAVAILABLE_ROLLBACK)
+    
+    @wifi_rollback.setter
+    def wifi_rollback(self, value: int) -> None:
+        """Set WiFi unavailable rollback count"""
+        self.settings['wifi_rollback'] = value
+    
+    @property
+    def max_retries(self) -> int:
+        """Get max connection retries"""
+        return self.settings.get('max_retries', Defaults.MAX_RETRIES)
+    
+    @max_retries.setter
+    def max_retries(self, value: int) -> None:
+        """Set max connection retries"""
+        self.settings['max_retries'] = value

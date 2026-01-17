@@ -431,16 +431,18 @@ class AsyncCrack:
                         self.win.reset_controls_state.send()
                         return False
                     
-                    # 每N次检测WiFi是否仍然可用
-                    if current_position % Defaults.WIFI_CHECK_INTERVAL == 0:
+                    # 每N次检测WiFi是否仍然可用（使用配置值）
+                    check_interval = self.tool.config.wifi_check_interval
+                    if current_position % check_interval == 0:
                         if not await self._check_wifi_available(ssid):
+                            rollback = self.tool.config.wifi_rollback
                             self._show_status_msg(
                                 f"[警告] WiFi [{ssid}] 已不可用，停止破解并保存进度"
-                                f"（回退{Defaults.WIFI_UNAVAILABLE_ROLLBACK}次）\n\n",
+                                f"（回退{rollback}次）\n\n",
                                 Colors.ORANGE
                             )
                             # 将位置往前调整
-                            save_position = max(1, current_position - Defaults.WIFI_UNAVAILABLE_ROLLBACK)
+                            save_position = max(1, current_position - rollback)
                             self.tool.config.save_resume_info(ssid, 'txt', pwd_path, save_position)
                             self.win.reset_controls_state.send()
                             return False
@@ -583,7 +585,7 @@ class AsyncCrack:
             temp_profile = await run_in_thread(self.iface.add_network_profile, profile)
             
             # Try connection with smart failure detection
-            max_retries = Defaults.MAX_RETRIES
+            max_retries = self.tool.config.max_retries  # 使用配置值
             auth_fail_threshold = Defaults.AUTH_FAIL_THRESHOLD
             base_timeout = self.tool.config.connect_time
             

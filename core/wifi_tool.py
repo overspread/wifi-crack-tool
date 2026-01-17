@@ -3,10 +3,8 @@
 WiFi Crack Tool - Core functionality with async support
 """
 import os
-import asyncio
 import datetime
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -14,7 +12,6 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from .constants import Colors, Messages, Defaults
 from .config import ConfigManager
 from .logger import get_logger, setup_logger
-from .crack import Crack
 from .crack_async import AsyncCrack
 from .async_runner import CancellableTask
 
@@ -50,17 +47,30 @@ class WifiCrackTool:
         self.run = False
         self.pwd_file_changed = False
         
-        # Create both sync and async crack instances
-        self.crack = Crack(self)
-        self.async_crack = AsyncCrack(self)
+        # Create async crack instance
+        self.crack = AsyncCrack(self)
         
         # Async task management
         self._current_task: Optional[CancellableTask] = None
-        self._use_async = True  # Flag to enable/disable async mode
         
         # Update password file display
         pwd_display = self.config.pwd_txt_name if self.config.pwd_file_exists() else Messages.NO_PWD_FILE
         self.win.set_display_using_pwd_file(pwd_display)
+        
+        # Apply advanced settings to UI (will be called after UI is fully initialized)
+        self._apply_advanced_settings()
+    
+    def _apply_advanced_settings(self) -> None:
+        """Apply saved advanced settings to UI controls"""
+        try:
+            if hasattr(self.ui, 'spn_check_interval'):
+                self.ui.spn_check_interval.setValue(self.config.wifi_check_interval)
+            if hasattr(self.ui, 'spn_rollback'):
+                self.ui.spn_rollback.setValue(self.config.wifi_rollback)
+            if hasattr(self.ui, 'spn_max_retries'):
+                self.ui.spn_max_retries.setValue(self.config.max_retries)
+        except Exception as e:
+            self.logger.debug(f"应用高级设置时出错: {e}")
     
     # ======================== Async Task Management ========================
     
@@ -87,13 +97,36 @@ class WifiCrackTool:
         """Handle scan time change"""
         value = self.ui.dbl_scan_time.value()
         self.config.scan_time = value
+        self.config.save_settings()
         self.win.show_msg.send(Messages.SCAN_TIME_SET.format(time=value), Colors.BLUE)
     
     def change_connect_time(self) -> None:
         """Handle connect time change"""
         value = self.ui.dbl_connect_time.value()
         self.config.connect_time = value
+        self.config.save_settings()
         self.win.show_msg.send(Messages.CONNECT_TIME_SET.format(time=value), Colors.BLUE)
+    
+    def change_check_interval(self) -> None:
+        """Handle WiFi check interval change"""
+        value = self.ui.spn_check_interval.value()
+        self.config.wifi_check_interval = value
+        self.config.save_settings()
+        self.show_msg(f"WiFi检测间隔已设置为每 {value} 次\n", Colors.BLUE)
+    
+    def change_rollback(self) -> None:
+        """Handle WiFi rollback count change"""
+        value = self.ui.spn_rollback.value()
+        self.config.wifi_rollback = value
+        self.config.save_settings()
+        self.show_msg(f"WiFi不可用回退次数已设置为 {value} 次\n", Colors.BLUE)
+    
+    def change_max_retries(self) -> None:
+        """Handle max retries change"""
+        value = self.ui.spn_max_retries.value()
+        self.config.max_retries = value
+        self.config.save_settings()
+        self.show_msg(f"连接重试次数已设置为 {value} 次\n", Colors.BLUE)
     
     # ======================== Password File ========================
     
@@ -208,19 +241,6 @@ class WifiCrackTool:
         self.ui.btn_pause_or_resume.setEnabled(True)
         self.ui.btn_stop.setEnabled(True)
     
-    def set_controls_pausing_state(self) -> None:
-        """Set controls to pausing state"""
-        self.ui.cbo_wifi_name.setDisabled(True)
-        self.ui.cbo_security_type.setDisabled(True)
-        self.ui.cbo_wnic.setDisabled(True)
-        self.ui.dbl_scan_time.setDisabled(True)
-        self.ui.dbl_connect_time.setDisabled(True)
-        self.ui.btn_change_pwd_file.setDisabled(True)
-        self.ui.btn_refresh_wifi.setDisabled(True)
-        self.ui.btn_start.setDisabled(True)
-        self.ui.btn_pause_or_resume.setEnabled(True)
-        self.ui.btn_stop.setEnabled(True)
-    
     # ======================== WiFi Operations ========================
     
     def refresh_wifi(self) -> None:
@@ -245,13 +265,8 @@ class WifiCrackTool:
                 self.reset_controls_state()
                 return
             
-            if self._use_async:
-                # Use async version
-                self._start_async_task(self.async_crack.search_wifi())
-            else:
-                # Fallback to sync version with threading
-                thread = threading.Thread(target=self.crack.search_wifi, daemon=True)
-                thread.start()
+            # Use async version
+            self._start_async_task(self.crack.search_wifi())
             
         except Exception as e:
             self.logger.error(f"扫描wifi时发生错误: {e}")
@@ -335,8 +350,7 @@ class WifiCrackTool:
         resume_info = self.config.resume_info
         pwd_file = self.config.pwd_txt_path
         
-        # Use async_crack's ssids for async mode
-        ssids = self.async_crack.ssids if self._use_async else self.crack.ssids
+        ssids = self.crack.ssids
         
         # Collect WiFis with resume info
         resume_wifis = []
@@ -373,15 +387,7 @@ class WifiCrackTool:
         if self.ui.cbo_wifi_name.currentIndex() == 0:
             self._start_auto_crack(start_position)
         else:
-            if self._use_async:
-                self._start_async_task(self.async_crack.crack(wifi_name, start_position))
-            else:
-                thread = threading.Thread(
-                    target=self.crack.crack, 
-                    args=(wifi_name, start_position), 
-                    daemon=True
-                )
-                thread.start()
+            self._start_async_task(self.crack.crack(wifi_name, start_position))
     
     def _start_auto_crack(self, start_position: int = 0) -> None:
         """
@@ -389,15 +395,7 @@ class WifiCrackTool:
         
         :param start_position: Starting position for resume
         """
-        if self._use_async:
-            self._start_async_task(self.async_crack.auto_crack(start_position))
-        else:
-            thread = threading.Thread(
-                target=self.crack.auto_crack, 
-                args=(start_position,), 
-                daemon=True
-            )
-            thread.start()
+        self._start_async_task(self.crack.auto_crack(start_position))
     
     def pause(self) -> None:
         """Pause or resume cracking"""
@@ -426,17 +424,15 @@ class WifiCrackTool:
             self.show_msg("正在尝试终止破解...")
             
             # Cancel async task if running
-            if self._use_async:
-                self._cancel_current_task()
+            self._cancel_current_task()
             
             # Save resume info
-            crack_instance = self.async_crack if self._use_async else self.crack
-            if hasattr(crack_instance, 'current_ssid') and hasattr(crack_instance, 'current_position'):
+            if hasattr(self.crack, 'current_ssid') and hasattr(self.crack, 'current_position'):
                 self.config.save_resume_info(
-                    crack_instance.current_ssid,
+                    self.crack.current_ssid,
                     'txt',
                     self.config.pwd_txt_path,
-                    crack_instance.current_position
+                    self.crack.current_position
                 )
             
             with self.crack_pause_condition:

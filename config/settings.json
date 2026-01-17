@@ -1,5 +1,8 @@
 {
     "scan_time": 6,
     "connect_time": 1,
-    "pwd_txt_path": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt"
+    "pwd_txt_path": "D:/project/python/wifi-crack-tool/password/wifiPassword.txt",
+    "max_retries": 3,
+    "wifi_check_interval": 50,
+    "wifi_rollback": 50
 }
