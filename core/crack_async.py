@@ -10,6 +10,10 @@ import platform
 from itertools import islice
 from typing import TYPE_CHECKING, Optional, Dict, List, Union
 
+# Windows 位置服务检查
+if platform.system() == "Windows":
+    import winreg
+
 import pyperclip
 from pywifi import const, PyWiFi, Profile
 from pywifi.iface import Interface
@@ -92,6 +96,74 @@ class AsyncCrack:
         """Reset cancellation flag"""
         self._cancelled = False
     
+    def _check_location_service(self) -> bool:
+        """
+        检查 Windows 位置服务是否开启
+        
+        在 Windows 10/11 中，WiFi 扫描需要位置服务开启才能正常工作。
+        如果位置服务未开启，pywifi 会出现 NULL pointer access 错误。
+        
+        :return: True 如果位置服务已开启或非 Windows 系统，False 如果未开启
+        """
+        if platform.system() != "Windows":
+            return True
+        
+        try:
+            # 检查系统级位置服务开关
+            # 位置: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location
+            key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location"
+            
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_READ)
+                value, _ = winreg.QueryValueEx(key, "Value")
+                winreg.CloseKey(key)
+                
+                if value == "Deny":
+                    self.logger.warning("系统位置服务已关闭")
+                    return False
+            except FileNotFoundError:
+                # 注册表键不存在，尝试旧版本路径
+                pass
+            except Exception as e:
+                self.logger.debug(f"检查系统位置服务时出错: {e}")
+            
+            # 检查用户级位置服务开关
+            # 位置: HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+                value, _ = winreg.QueryValueEx(key, "Value")
+                winreg.CloseKey(key)
+                
+                if value == "Deny":
+                    self.logger.warning("用户位置服务已关闭")
+                    return False
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                self.logger.debug(f"检查用户位置服务时出错: {e}")
+            
+            # 检查 Windows Location 服务是否运行（lfsvc）
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['sc', 'query', 'lfsvc'],
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                if 'RUNNING' not in result.stdout:
+                    self.logger.warning("Windows 位置服务(lfsvc)未运行")
+                    # 服务未运行不一定影响WiFi扫描，只记录警告
+            except Exception as e:
+                self.logger.debug(f"检查位置服务运行状态时出错: {e}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"检查位置服务时发生错误: {e}")
+            # 出错时假设服务已开启，不阻止用户使用
+            return True
+    
     def _init_wnic(self) -> None:
         """Initialize wireless network adapter"""
         try:
@@ -118,6 +190,20 @@ class AsyncCrack:
     async def search_wifi(self) -> None:
         """Async scan for nearby WiFi networks"""
         try:
+            # 检查位置服务是否开启
+            if not self._check_location_service():
+                self._show_warning_and_reset(
+                    '位置服务未开启',
+                    'Windows 位置服务未开启！\n\n'
+                    'WiFi 扫描功能需要开启位置服务才能正常工作。\n\n'
+                    '请按以下步骤开启：\n'
+                    '1. 打开 Windows 设置\n'
+                    '2. 进入「隐私和安全性」→「位置」\n'
+                    '3. 开启「位置服务」开关\n\n'
+                    '或者按 Win+I 打开设置，搜索「位置」进行设置。'
+                )
+                return
+            
             # Validate wireless adapter
             if not self.wnics or len(self.wnics) == 0:
                 self._show_warning_and_reset('警告', Messages.NO_WNIC_FOUND)

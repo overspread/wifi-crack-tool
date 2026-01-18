@@ -89,7 +89,7 @@ class WifiCrackTool:
         """Cancel the current async task if running"""
         if self._current_task is not None:
             self._current_task.cancel()
-            self.async_crack.cancel()
+            self.crack.cancel()
     
     # ======================== Settings ========================
     
